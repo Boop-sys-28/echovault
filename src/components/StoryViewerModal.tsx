@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Send } from 'lucide-react';
 import { Character } from '../types';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface StoryViewerModalProps {
   isOpen: boolean;
@@ -72,8 +73,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         <div className="absolute top-6 inset-x-4 z-20 flex items-center justify-between text-white drop-shadow">
           <div className="flex items-center space-x-2.5">
             <img
-              src={character.avatar}
+              src={resolveAvatarUrl(character.avatar, character.id)}
               alt={character.name}
+              onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-9 h-9 rounded-full object-cover object-top border border-white/40 shadow-sm bg-[#1a1e2e]"
             />
             <div>
@@ -94,8 +96,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         {/* Media Background */}
         <div className="relative flex-1 w-full bg-zinc-950 flex items-center justify-center overflow-hidden">
           <img
-            src={character.storyImg}
+            src={resolveAvatarUrl(character.storyImg, character.id)}
             alt="Story Media"
+            onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
             className="w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/40"></div>

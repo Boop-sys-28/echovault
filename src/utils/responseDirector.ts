@@ -32,7 +32,7 @@ export const MOOD_LABELS: Record<ResponseMood, { label: string; badge: string; d
     label: 'Protective & Possessive',
     badge: 'PROTECTIVE 🛡️',
     desc: 'Intensely loyal, slightly jealous, and fiercely protective.',
-    promptRule: 'Be fiercely protective, possessive, and intensely focused on the user’s well-being. Ask who else they have been talking to, remind them you have their back, and show strong attachment.',
+    promptRule: 'Be fiercely protective, possessive, and intensely focused on the user’s well-being. Express jealous or protective energy, remind them you have their back, and show strong attachment.',
   },
   chaotic: {
     label: 'Chaotic & Unhinged',
@@ -67,7 +67,7 @@ export const PACING_LABELS: Record<ResponsePacing, { label: string; desc: string
   expressive_rp: {
     label: 'Expressive & Detailed',
     desc: 'Richer dialogue with subtle actions and atmosphere.',
-    promptRule: 'Provide richer, more expressive dialogue with vivid emotional subtext and atmospheric detail.',
+    promptRule: 'Provide richer, more expressive dialogue with vivid emotional subtext and physical roleplay actions in asterisks (*...*).',
   },
 };
 
@@ -142,45 +142,6 @@ export function buildDirectivePromptBlock(charId: string): string {
 
   if (parts.length === 0) return '';
   return `\n\n[USER-CONFIGURED RESPONSE BEHAVIOR OVERRIDES]:\n${parts.join('\n')}`;
-}
-
-/**
- * Applies mood/pacing styling to offline fallback replies so offline responses also obey the user's tuning
- */
-export function applyDirectiveToOfflineReply(charId: string, replyText: string): string {
-  const dir = getCharacterDirective(charId);
-  let output = replyText;
-
-  if (dir.mood === 'canon' && dir.pacing === 'natural' && !dir.customInstruction) {
-    return output;
-  }
-
-  // Apply mood flavor if not already present
-  if (dir.mood === 'flirty' && !output.includes('💕') && !output.includes('😉')) {
-    output = `${output} || honestly though, i love it when you text me like this 💕`;
-  } else if (dir.mood === 'tsundere') {
-    output = `don't get the wrong idea, i only replied bc my phone was already in my hand!! 💢 || ${output}`;
-  } else if (dir.mood === 'protective') {
-    output = `${output} || make sure you're taking care of yourself right now. i'm keeping an eye on you.`;
-  } else if (dir.mood === 'vulnerable') {
-    output = `${output} || ...it's actually really nice just talking to you quietly like this.`;
-  } else if (dir.mood === 'chaotic') {
-    output = `${output.toUpperCase()} 🔥 || WAIT NO HEAR ME OUT—`;
-  }
-
-  // Apply pacing transform
-  if (dir.pacing === 'lowercase_casual') {
-    output = output.toLowerCase();
-  } else if (dir.pacing === 'rapid_burst' && !output.includes(' || ')) {
-    const sentences = output.split(/(?<=[.!?])\s+/).filter(Boolean);
-    if (sentences.length >= 2) {
-      output = sentences.join(' || ');
-    } else {
-      output = `${output} || wait also—`;
-    }
-  }
-
-  return output;
 }
 
 /**

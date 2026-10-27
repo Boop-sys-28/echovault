@@ -1,37 +1,84 @@
-import express from 'express';
 import dotenv from 'dotenv';
+dotenv.config({ override: true });
+
+import express from 'express';
+import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 
-dotenv.config();
+const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Allow Google Identity Services (GIS) and Firebase OAuth popups to communicate with window.opener
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(204);
-    return;
+/**
+ * Helper to resolve the active Gemini API key from environment or .env file.
+ */
+function getActiveGeminiKey(): string {
+  const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  if (
+    envKey &&
+    envKey !== 'MY_GEMINI_API_KEY' &&
+    envKey !== 'YOUR_GEMINI_API_KEY' &&
+    envKey.trim().length > 10
+  ) {
+    return envKey.trim();
   }
-  next();
-});
 
-app.use(express.json({ limit: '100mb' }));
+  try {
+    if (fs.existsSync(ENV_FILE_PATH)) {
+      const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
+      const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
+      if (match && match[1]) {
+        const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
+        if (
+          fileKey &&
+          fileKey !== 'MY_GEMINI_API_KEY' &&
+          fileKey !== 'YOUR_GEMINI_API_KEY' &&
+          fileKey.length > 10
+        ) {
+          process.env.GEMINI_API_KEY = fileKey;
+          return fileKey;
+        }
+      }
+    }
+  } catch {
+    // ignore read error
+  }
 
-const apiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI | null = null;
-if (apiKey) {
-  ai = new GoogleGenAI({
+  return '';
+}
+
+/**
+ * Persists a new GEMINI_API_KEY into process.env and writes it to `.env`
+ */
+function saveGeminiKey(newKey: string): void {
+  const cleanKey = newKey.trim();
+  process.env.GEMINI_API_KEY = cleanKey;
+
+  try {
+    let envContent = '';
+    if (fs.existsSync(ENV_FILE_PATH)) {
+      envContent = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
+    }
+
+    if (/^GEMINI_API_KEY=.*$/m.test(envContent)) {
+      envContent = envContent.replace(/^GEMINI_API_KEY=.*$/m, `GEMINI_API_KEY=${cleanKey}`);
+    } else {
+      envContent = `${envContent.trim()}\nGEMINI_API_KEY=${cleanKey}\n`.trimStart();
+    }
+
+    fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
+  } catch (err) {
+    console.warn('Could not write GEMINI_API_KEY to .env file (kept in memory):', err);
+  }
+}
+
+const CANDIDATE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+];
+
+function createGenAiClient(apiKey: string): GoogleGenAI {
+  return new GoogleGenAI({
     apiKey,
     httpOptions: {
       headers: {
@@ -41,504 +88,474 @@ if (apiKey) {
   });
 }
 
-let runtimeApiKey = process.env.GEMINI_API_KEY || '';
-
-function getActiveApiKey(): string {
-  return runtimeApiKey || process.env.GEMINI_API_KEY || '';
-}
-
-function getGenAIClient(): GoogleGenAI | null {
-  const key = getActiveApiKey();
-  if (!key) return null;
-  if (!ai) {
-    ai = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return ai;
-}
-
-// Multi-model orchestration pool (ordered for low latency and high quota availability)
-const CANDIDATE_MODELS = [
-  'gemini-3-flash-preview',
-  'gemini-2.5-flash',
-  'gemini-flash-latest',
-  'gemini-3.1-flash-lite-preview',
-];
-
-const BANNED_AI_FILLER_PATTERNS = [
-  /\bas an ai\b/i,
-  /\bas a language model\b/i,
-  /\bi understand how you feel\b/i,
-  /\bhow can i assist you today\b/i,
-  /\bhow may i help you\b/i,
-  /\bi'm here to help\b/i,
-  /\bi am an artificial intelligence\b/i,
-];
-
-function sanitizeAndCapBubbles(rawText: string): string {
+/**
+ * Cleans up model output while preserving Character.AI-style asterisk roleplay (*...*),
+ * raw emotional tone, and multi-bubble formatting (` || `).
+ */
+function formatCharacterBubbles(rawText: string): string {
   const cleaned = rawText
-    .replace(/\*[^*]+\*/g, ' ')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/^(?:Character|Assistant|AI|Model|System):\s*/gim, '')
     .trim();
 
-  const bubbles = cleaned
-    .split(/\s*\|\|\s*|\n{2,}/)
-    .map(b => b.trim())
-    .filter(Boolean);
+  if (!cleaned) return '';
 
-  if (bubbles.length === 0) return cleaned;
-  if (bubbles.length <= 3) return bubbles.join(' || ');
-  const firstTwo = bubbles.slice(0, 2);
-  const thirdCombined = bubbles.slice(2).join(' ');
-  return [...firstTwo, thirdCombined].join(' || ');
+  let bubbles: string[];
+  if (cleaned.includes('||')) {
+    bubbles = cleaned
+      .split('||')
+      .map(s => s.trim())
+      .filter(Boolean);
+  } else if (cleaned.includes('\n\n')) {
+    bubbles = cleaned
+      .split(/\n{2,}/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  } else {
+    bubbles = [cleaned];
+  }
+
+  return bubbles.slice(0, 3).join(' || ');
 }
 
-function buildNormalizedContents(
-  history: Array<{ role?: string; text?: string }> | undefined,
-  prompt: string
-): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
-  const rawTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
+function isQuotaError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return (
+    err?.status === 429 ||
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('quota')
+  );
+}
 
-  if (Array.isArray(history)) {
-    for (const item of history.slice(-50)) {
-      if (!item || typeof item.text !== 'string' || !item.text.trim()) continue;
-      rawTurns.push({
-        role: item.role === 'user' ? 'user' : 'model',
-        text: item.text.trim(),
+async function startServer() {
+  const app = express();
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Allow Google Identity Services OAuth popups to postMessage cleanly back to window
+  app.use((_req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    next();
+  });
+
+  app.use(express.json({ limit: '5mb' }));
+
+  // 1. Check Server AI Status & Masked Key Info
+  app.get('/api/status', (_req, res) => {
+    const key = getActiveGeminiKey();
+    const maskedKey =
+      key.length > 10 ? `${key.slice(0, 6)}••••••••${key.slice(-4)}` : null;
+    res.json({
+      hasApiKey: Boolean(key),
+      aiConfigured: Boolean(key),
+      maskedKey,
+      model: CANDIDATE_MODELS[0],
+    });
+  });
+
+  // 2. Save & Verify Gemini API Key at Runtime
+  app.post('/api/config/key', async (req, res) => {
+    try {
+      const { apiKey } = req.body;
+      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 15) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Please enter a valid Gemini API key (starts with AIza...).',
+        });
+      }
+
+      const candidate = apiKey.trim();
+
+      const ai = createGenAiClient(candidate);
+      let verified = false;
+      let lastVerifyErr: any = null;
+
+      for (const modelName of CANDIDATE_MODELS) {
+        try {
+          const testResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: 'Reply with OK',
+          });
+          if (testResponse && testResponse.text) {
+            verified = true;
+            break;
+          }
+        } catch (err: any) {
+          lastVerifyErr = err;
+          if (isQuotaError(err)) {
+            verified = true;
+            break;
+          }
+        }
+      }
+
+      if (!verified && lastVerifyErr) {
+        const msg = String(lastVerifyErr?.message || '');
+        if (msg.includes('API_KEY_INVALID') || msg.includes('key not valid')) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Invalid Gemini API Key. Please check your key in Google AI Studio.',
+          });
+        }
+      }
+
+      saveGeminiKey(candidate);
+      const maskedKey = `${candidate.slice(0, 6)}••••••••${candidate.slice(-4)}`;
+
+      return res.json({
+        ok: true,
+        hasApiKey: true,
+        aiConfigured: true,
+        maskedKey,
+      });
+    } catch (error: any) {
+      console.error('API key validation error:', error?.message || error);
+      return res.status(400).json({
+        ok: false,
+        error:
+          error?.message?.includes('API_KEY_INVALID')
+            ? 'Invalid Gemini API Key. Please check your key in Google AI Studio.'
+            : 'Could not verify API key. Please double-check that it is active.',
       });
     }
-  }
-
-  // Merge consecutive turns of the same role so multi-bubble ('model', 'model') messages
-  // never violate Gemini's alternating user/model turn requirement
-  const mergedTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
-  for (const turn of rawTurns) {
-    const prev = mergedTurns[mergedTurns.length - 1];
-    if (prev && prev.role === turn.role) {
-      prev.text = prev.role === 'model' ? `${prev.text} || ${turn.text}` : `${prev.text}\n${turn.text}`;
-    } else {
-      mergedTurns.push({ ...turn });
-    }
-  }
-
-  // Ensure multi-turn contents begins with a 'user' message
-  while (mergedTurns.length > 0 && mergedTurns[0].role !== 'user') {
-    mergedTurns.shift();
-  }
-
-  // Append or merge the latest user prompt
-  const cleanPrompt = prompt.trim();
-  const lastTurn = mergedTurns[mergedTurns.length - 1];
-  if (lastTurn && lastTurn.role === 'user') {
-    if (lastTurn.text !== cleanPrompt) {
-      lastTurn.text = `${lastTurn.text}\n${cleanPrompt}`;
-    }
-  } else {
-    mergedTurns.push({ role: 'user', text: cleanPrompt });
-  }
-
-  return mergedTurns.map(t => ({
-    role: t.role,
-    parts: [{ text: t.text }],
-  }));
-}
-
-// Track cooldown timestamps for models that hit 429 RESOURCE_EXHAUSTED
-const modelCooldownUntil: Record<string, number> = {};
-
-interface ServerTropeCluster {
-  id: string;
-  label: string;
-  keywords: string[];
-}
-
-const BANNED_REPETITIVE_TROPES: ServerTropeCluster[] = [
-  {
-    id: 'hydration_nag',
-    label: 'Telling the user to drink water or hydrate',
-    keywords: ['drink water', 'hydrate', 'hydration', 'glass of water', 'water intake', 'thirsty'],
-  },
-  {
-    id: 'sleep_nag',
-    label: 'Nagging the user to go to sleep, close their eyes, or lecturing about late hours/insomnia',
-    keywords: [
-      'go to sleep',
-      'go to bed',
-      'close your eyes',
-      'still awake',
-      'past 6 am',
-      '6 am',
-      'beauty sleep',
-      'dark circles',
-      'hit the rack',
-      'hit the hay',
-      'shut-eye',
-      'bedside lamp',
-      'under the covers',
-      'sleep schedule',
-      'insomnia',
-      'all-nighter',
-    ],
-  },
-  {
-    id: 'posture_nag',
-    label: 'Nagging about posture, slouching, or squinting at the screen',
-    keywords: ['posture', 'slouch', 'squinting', 'burn out', 'sit up straight'],
-  },
-  {
-    id: 'blitz_cereal_kitchen',
-    label: 'Blitzø throwing cereal/spoons, slamming kitchen cabinets, or kitchen chaos',
-    keywords: [
-      'cereal',
-      'lucky charms',
-      'captain crunch',
-      'spoon',
-      'cabinet',
-      'cupboard',
-      'blender',
-      'cottage cheese',
-      'linoleum',
-      'fridge door',
-      'microwave',
-    ],
-  },
-  {
-    id: 'stolas_sofa_groan',
-    label: 'Stolas groaning, sighing, or sleeping on the squeaky pullout sofa/couch',
-    keywords: [
-      'pullout',
-      'squeaky',
-      'groan',
-      'sighing',
-      'lumbar',
-      'ratty sofa',
-      'couch spring',
-      'bathtub crying',
-    ],
-  },
-  {
-    id: 'vassago_locket_auction',
-    label: 'Vassago, the auction, Safeword, or Stolas mother locket loop',
-    keywords: ['vassago', 'locket', 'safeword', 'auction', 'bluebird', 'heirloom'],
-  },
-  {
-    id: 'coffee_routine',
-    label: 'Repeating black coffee or coffee cup count complaints',
-    keywords: ['black coffee', 'fourth cup', 'cup number four', 'coffee #4', 'black sludge'],
-  },
-];
-
-const SERVER_STOP_WORDS = new Set([
-  'the', 'and', 'that', 'have', 'for', 'not', 'with', 'you', 'this', 'but', 'his',
-  'from', 'they', 'say', 'her', 'she', 'will', 'one', 'all', 'would', 'there',
-  'their', 'what', 'out', 'about', 'who', 'get', 'which', 'when', 'make', 'can',
-  'like', 'time', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your',
-  'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look',
-  'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two',
-  'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because',
-  'any', 'these', 'give', 'day', 'most', 'are', 'was', 'were', 'been', 'has', 'had',
-  'don', 'dont', 'did', 'didn', 'really', 'still', 'right', 'here', 'more', 'something',
-]);
-
-function extractSemanticTokens(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !SERVER_STOP_WORDS.has(w));
-}
-
-function checkSemanticRepetitionOnServer(
-  candidate: string,
-  pastModelMessages: string[],
-  userPrompt: string
-): { isRepetitive: boolean; reason?: string } {
-  const cleanCandidate = candidate.trim().toLowerCase();
-  if (!cleanCandidate) return { isRepetitive: true, reason: 'Empty output' };
-
-  if (BANNED_AI_FILLER_PATTERNS.some(rx => rx.test(cleanCandidate))) {
-    return {
-      isRepetitive: true,
-      reason: 'Contains forbidden generic AI filler phrase',
-    };
-  }
-
-  const lowerPrompt = userPrompt.toLowerCase();
-
-  // 1. Check banned repetitive tropes unless the user explicitly brought them up in their latest prompt
-  for (const cluster of BANNED_REPETITIVE_TROPES) {
-    const userAskedAboutTrope = cluster.keywords.some(kw => lowerPrompt.includes(kw));
-    if (!userAskedAboutTrope && cluster.keywords.some(kw => cleanCandidate.includes(kw))) {
-      return {
-        isRepetitive: true,
-        reason: `Contains banned repetitive trope (${cluster.label}) not requested by user`,
-      };
-    }
-  }
-
-  // 2. Check exact and high semantic token overlap against recent character messages
-  const candidateTokens = extractSemanticTokens(cleanCandidate);
-  const candidateSet = new Set(candidateTokens);
-
-  for (const past of pastModelMessages.slice(-30)) {
-    const cleanPast = past.trim().toLowerCase();
-    if (!cleanPast) continue;
-
-    if (cleanCandidate === cleanPast) {
-      return { isRepetitive: true, reason: 'Exact duplicate of a previous message' };
-    }
-
-    const pastTokens = extractSemanticTokens(cleanPast);
-    if (pastTokens.length < 4 || candidateSet.size < 4) continue;
-
-    let intersection = 0;
-    for (const t of pastTokens) {
-      if (candidateSet.has(t)) intersection++;
-    }
-
-    const union = new Set([...candidateTokens, ...pastTokens]).size;
-    const jaccard = union > 0 ? intersection / union : 0;
-    const containment =
-      Math.min(candidateSet.size, pastTokens.length) > 0
-        ? intersection / Math.min(candidateSet.size, pastTokens.length)
-        : 0;
-
-    if (jaccard >= 0.48 || (candidateSet.size >= 6 && containment >= 0.72)) {
-      return {
-        isRepetitive: true,
-        reason: `High semantic similarity with previous message: "${past.slice(0, 70)}"`,
-      };
-    }
-  }
-
-  return { isRepetitive: false };
-}
-
-// Status check endpoints
-app.get('/api/status', (_req, res) => {
-  const key = getActiveApiKey();
-  res.json({
-    status: 'online',
-    hasApiKey: Boolean(key && key.trim().length > 5),
-    model: CANDIDATE_MODELS[0],
   });
-});
 
-app.get('/api/health', (_req, res) => {
-  const key = getActiveApiKey();
-  res.json({
-    status: 'ok',
-    hasApiKey: Boolean(key && key.trim().length > 5),
-    keySource: runtimeApiKey !== (process.env.GEMINI_API_KEY || '') ? 'custom' : process.env.GEMINI_API_KEY ? 'env' : 'none',
+  // 3. Remove / Clear Stored API Key
+  app.delete('/api/config/key', (_req, res) => {
+    delete process.env.GEMINI_API_KEY;
+    try {
+      if (fs.existsSync(ENV_FILE_PATH)) {
+        const envContent = fs
+          .readFileSync(ENV_FILE_PATH, 'utf-8')
+          .replace(/^GEMINI_API_KEY=.*$/m, 'GEMINI_API_KEY=');
+        fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
+      }
+    } catch {
+      // ignore
+    }
+    res.json({ ok: true, aiConfigured: false });
   });
-});
 
-app.post('/api/config/apikey', (req, res) => {
-  const { apiKey: newKey } = req.body || {};
-  if (typeof newKey === 'string' && newKey.trim().length > 10) {
-    runtimeApiKey = newKey.trim();
-    ai = new GoogleGenAI({
-      apiKey: runtimeApiKey,
-      httpOptions: {
+  // 4. Character.AI Public Share / Character Link Scraper & Parser
+  app.post('/api/import-cai-url', async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url || typeof url !== 'string') {
+        return res.status(400).json({ error: 'Please provide a valid Character.AI URL.' });
+      }
+
+      const trimmedUrl = url.trim();
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(trimmedUrl);
+      } catch {
+        return res.status(400).json({ error: 'Invalid URL format.' });
+      }
+
+      if (
+        !parsedUrl.hostname.includes('character.ai') &&
+        !parsedUrl.hostname.includes('c.ai')
+      ) {
+        return res.status(400).json({
+          error: 'URL must be a character.ai or c.ai link.',
+        });
+      }
+
+      const response = await fetch(trimmedUrl, {
         headers: {
-          'User-Agent': 'aistudio-build',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
         },
-      },
-    });
-    return res.json({
-      success: true,
-      hasApiKey: true,
-      keySource: 'custom',
-    });
-  }
-  return res.status(400).json({ error: 'Invalid Gemini API Key format.' });
-});
+      });
 
-app.delete('/api/config/apikey', (_req, res) => {
-  runtimeApiKey = process.env.GEMINI_API_KEY || '';
-  ai = runtimeApiKey
-    ? new GoogleGenAI({
-        apiKey: runtimeApiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
+      const html = await response.text();
+
+      const nextDataMatch = html.match(
+        /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i
+      );
+
+      let characterName = '';
+      let characterDescription = '';
+      let characterGreeting = '';
+      let characterAvatar = '';
+      let characterTitle = '';
+      const messages: Array<{ sender: 'user' | 'char'; text: string }> = [];
+
+      if (nextDataMatch && nextDataMatch[1]) {
+        try {
+          const nextData = JSON.parse(nextDataMatch[1]);
+          const pageProps = nextData?.props?.pageProps || {};
+
+          const charObj =
+            pageProps.character ||
+            pageProps.char ||
+            pageProps.chat?.character ||
+            pageProps.sharedChat?.character ||
+            pageProps.initialState?.character;
+
+          if (charObj) {
+            characterName = charObj.name || charObj.participant__name || '';
+            characterTitle = charObj.title || '';
+            characterDescription = charObj.description || charObj.definition || '';
+            characterGreeting = charObj.greeting || '';
+            if (charObj.avatar_file_name) {
+              characterAvatar = `https://characterai.io/i/200/static/avatars/${charObj.avatar_file_name}`;
+            }
+          }
+
+          const rawTurns =
+            pageProps.turns ||
+            pageProps.messages ||
+            pageProps.chat?.turns ||
+            pageProps.sharedChat?.turns ||
+            pageProps.history?.msgs ||
+            [];
+
+          if (Array.isArray(rawTurns)) {
+            for (const turn of rawTurns) {
+              const text =
+                turn.text ||
+                turn.candidates?.[0]?.raw_content ||
+                turn.speech ||
+                '';
+              const isHuman =
+                turn.author?.is_human === true ||
+                turn.src?.is_human === true ||
+                turn.is_human === true ||
+                turn.role === 'user';
+              if (text && typeof text === 'string' && text.trim()) {
+                messages.push({
+                  sender: isHuman ? 'user' : 'char',
+                  text: text.trim(),
+                });
+              }
+            }
+          }
+        } catch {
+          // fallback to meta tag parsing
+        }
+      }
+
+      if (!characterName) {
+        const ogTitle =
+          html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+          html.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+          '';
+        if (ogTitle) {
+          characterName = ogTitle
+            .replace(/\s*\|\s*character\.ai.*$/i, '')
+            .replace(/^Chat with\s+/i, '')
+            .trim();
+        }
+      }
+
+      if (!characterDescription) {
+        const ogDesc =
+          html.match(
+            /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i
+          )?.[1] ||
+          html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+          '';
+        if (ogDesc) {
+          characterDescription = ogDesc.trim();
+        }
+      }
+
+      if (!characterAvatar) {
+        const ogImg =
+          html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+          '';
+        if (ogImg) {
+          characterAvatar = ogImg.trim();
+        }
+      }
+
+      const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+      const slugId = pathParts[pathParts.length - 1] || 'Character';
+
+      if (
+        !characterName ||
+        characterName.toLowerCase().includes('just a moment') ||
+        characterName.toLowerCase() === 'character.ai'
+      ) {
+        characterName = `C.AI Import (${slugId.slice(0, 8)})`;
+      }
+
+      return res.json({
+        ok: true,
+        character: {
+          name: characterName,
+          title: characterTitle || 'IMPORTED FROM C.AI',
+          description: characterDescription,
+          greeting: characterGreeting,
+          avatar: characterAvatar,
+          sourceUrl: trimmedUrl,
         },
-      })
-    : null;
-  return res.json({
-    success: true,
-    hasApiKey: Boolean(runtimeApiKey && runtimeApiKey.trim().length > 5),
-    keySource: runtimeApiKey ? 'env' : 'none',
-  });
-});
-
-// Core Gemini Response Orchestration Endpoint
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { prompt, systemInstruction, history, memories } = req.body;
-
-    if (!prompt || typeof prompt !== 'string') {
-      return res.status(400).json({ error: 'Prompt is required' });
+        messages,
+        cloudflareProtected:
+          html.includes('Just a moment...') || html.includes('cf-browser-verification'),
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'Could not reach Character.AI URL. You can also paste chat text or JSON directly.',
+        details: err?.message,
+      });
     }
+  });
 
-    const client = getGenAIClient();
-    if (!client) {
-      return res.status(200).json({
-        text: '',
-        fallback: true,
+  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Zero Script Constraints)
+  app.post('/api/chat', async (req, res) => {
+    const { prompt, systemInstruction, history, memories } = req.body;
+    const apiKey = getActiveGeminiKey();
+
+    if (!apiKey) {
+      return res.status(503).json({
+        error: '⚠️ Gemini API quota / connection error (No API key configured)',
         reason: 'NO_API_KEY',
       });
     }
 
-    const previousModelMessages: string[] = [];
-    const previousModelSentences: string[] = [];
+    const ai = createGenAiClient(apiKey);
+
+    const formattedContents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
 
     if (Array.isArray(history)) {
-      for (const item of history.slice(-50)) {
-        if (!item || typeof item.text !== 'string' || !item.text.trim()) continue;
-        if (item.role !== 'user') {
-          previousModelMessages.push(item.text.trim());
-          const sentences = item.text
-            .split(/(?:\|\||[.!?\n])+/)
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 6);
-          previousModelSentences.push(...sentences);
+      const recentHistory = history.slice(-50);
+      for (const turn of recentHistory) {
+        if (turn && typeof turn.text === 'string' && turn.text.trim()) {
+          const role = turn.role === 'model' ? 'model' : 'user';
+          if (
+            formattedContents.length > 0 &&
+            formattedContents[formattedContents.length - 1].role === role
+          ) {
+            formattedContents[formattedContents.length - 1].parts[0].text += `\n${turn.text.trim()}`;
+          } else {
+            formattedContents.push({
+              role,
+              parts: [{ text: turn.text.trim() }],
+            });
+          }
         }
       }
     }
 
-    const uniquePastSentences = Array.from(new Set(previousModelSentences)).slice(-25);
-    const contents = buildNormalizedContents(history, prompt);
+    if (
+      formattedContents.length > 0 &&
+      formattedContents[formattedContents.length - 1].role === 'user'
+    ) {
+      formattedContents[formattedContents.length - 1].parts[0].text += `\n${String(prompt || '').trim()}`;
+    } else {
+      formattedContents.push({
+        role: 'user',
+        parts: [{ text: String(prompt || '').trim() }],
+      });
+    }
 
-    const orchestrationDirective = `
-[DIRECT-REACTION & SPONTANEOUS DIALOGUE DIRECTIVES]:
-1. REACT DIRECTLY TO THE USER'S MESSAGE FIRST:
-   - Your very first sentence/bubble MUST react directly to the specific topic, emotion, detail, or question in the user's latest message: "${prompt.slice(0, 240)}".
-   - Answer their question or address what they just said before adding your own thoughts, banter, or follow-up question.
-2. 100%AUTHENTIC CANON VOICE — FORBID AI FILLER PHRASES:
-   - NEVER use generic AI filler phrases such as "As an AI...", "I understand how you feel", "How can I assist you today?", "I'm here to help", or customer-support language.
-   - Sound 100% like a real text message sent directly from this character's phone in their distinct canon personality.
-3. CLEAN MULTI-BUBBLE PACING (MAXIMUM 2–3 SHORT BUBBLES):
-   - Keep replies concise and natural like real mobile texting.
-   - If splitting into multiple thoughts, separate them with ' || ', using a MAXIMUM of 2 to 3 short, natural text bubbles per reply so typing delays finish smoothly.
-   - NEVER use roleplay asterisks (*sighs*) or third-person narration.
-4. ZERO REPETITION OR SCRIPTED LOOPS:
-   - Formulate a completely unique, spontaneous reply every turn.
-   - Unless the user explicitly brings them up, NEVER mention nagging about drinking water, going to sleep / 6 AM, posture, Blitzø eating cereal/slamming cabinets, or Stolas sighing on the pullout sofa.
-${
-  uniquePastSentences.length > 0
-    ? `5. PREVIOUSLY SENT LINES (DO NOT REPEAT OR PARAPHRASE THESE):
-${uniquePastSentences.map((l: string) => `   - "${l}"`).join('\n')}`
-    : ''
-}`;
+    const cleanMemories = Array.isArray(memories)
+      ? memories
+          .map((m: unknown) => String(m).trim())
+          .filter(
+            (m: string) =>
+              m.length > 0 &&
+              !m.toLowerCase().includes('transmission handle') &&
+              !m.toLowerCase().includes('operative_')
+          )
+      : [];
 
-    const memoryConstraint =
-      Array.isArray(memories) && memories.length > 0
-        ? `\n\n[EPISODIC MEMORIES OF THIS USER (UP TO 75 ACTIVE FACTS)]:
-You remember these facts about the user (only weave one in if it naturally connects to what they just said):
-${memories.slice(0, 75).map((m: string) => `- ${m}`).join('\n')}`
+    const memorySection =
+      cleanMemories.length > 0
+        ? `\n\n[BACKGROUND KNOWLEDGE ABOUT THE USER (Never quote verbatim; only weave in naturally if relevant)]:\n${cleanMemories
+            .slice(0, 50)
+            .map((m: string) => `- ${m}`)
+            .join('\n')}`
         : '';
 
-    const enhancedSystemInstruction = `${systemInstruction || 'You are an authentic direct messaging participant.'}
-${memoryConstraint}
-${orchestrationDirective}`;
+    const unconstrainedCaiDirective = `\n\n[UNCONSTRAINED CHARACTER.AI ROLEPLAY & EXPRESSION ENGINE]:
+- BASELINE RELATIONSHIP & AFFINITY (0 / STRANGER TIER): Your relationship level, affection, intimacy meter, trust score, and bond with the user start at 0 (Stranger / Neutral new contact). Do NOT assume any pre-existing romance, affection, pet names, or established intimacy unless rebuilt organically through the current conversation.
+- HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E5 "THE AUCTION" & PART 1 FINALE READINESS): If you are a Helluva Boss character (Blitzø, Stolas, Vassago, Millie, Moxxie, Loona, Octavia, Verosika, or Fizzarolli), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–5: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), and S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), with emotional readiness for the Season 3 Part 1 finale.
+- ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.
+- DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages.
+- MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
 
-    const now = Date.now();
-    const availableModels = CANDIDATE_MODELS.filter(
-      m => !modelCooldownUntil[m] || modelCooldownUntil[m] < now
-    );
-    const modelsToTry = availableModels.length > 0 ? availableModels : CANDIDATE_MODELS;
+    const fullSystemInstruction = `${systemInstruction || ''}${memorySection}${unconstrainedCaiDirective}`;
 
-    for (const modelName of modelsToTry) {
+    const generationConfig = {
+      systemInstruction: fullSystemInstruction,
+      temperature: 1.0,
+      topP: 0.95,
+      frequencyPenalty: 0.7,
+      presencePenalty: 0.6,
+    };
+
+    const fallbackGenerationConfig = {
+      systemInstruction: fullSystemInstruction,
+      temperature: 1.0,
+      topP: 0.95,
+    };
+
+    let lastError: any = null;
+
+    for (const modelName of CANDIDATE_MODELS) {
       try {
-        const response = await client.models.generateContent({
-          model: modelName,
-          contents,
-          config: {
-            systemInstruction: enhancedSystemInstruction,
-            temperature: 0.85,
-            topP: 0.95,
-            topK: 40,
-            maxOutputTokens: 400,
-          },
-        });
-
-        let reply = (response.text || '').trim();
-        if (!reply) continue;
-
-        // Post-generation Semantic Deduplication & Anti-Filler Gate
-        const semCheck = checkSemanticRepetitionOnServer(reply, previousModelMessages, prompt);
-        if (semCheck.isRepetitive) {
-          try {
-            const rewritePrompt = `${prompt}\n\n[DIRECTOR REWRITE NOTE: Your draft ("${reply.slice(
-              0,
-              120
-            )}") was rejected (${semCheck.reason}). Write a completely fresh, spontaneous in-character text message that reacts directly to the specific topic, emotion, and question in "${prompt.slice(
-              0,
-              160
-            )}". Max 2–3 short bubbles separated by ' || '. Zero AI filler or repeated lines.]`;
-
-            const rewriteContents = buildNormalizedContents(history, rewritePrompt);
-            const rewriteResponse = await client.models.generateContent({
+        let response;
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: formattedContents,
+            config: generationConfig,
+          });
+        } catch (innerErr: any) {
+          const innerMsg = String(innerErr?.message || '');
+          if (
+            innerErr?.status === 400 ||
+            innerMsg.includes('INVALID_ARGUMENT') ||
+            innerMsg.includes('penalty')
+          ) {
+            response = await ai.models.generateContent({
               model: modelName,
-              contents: rewriteContents,
-              config: {
-                systemInstruction: enhancedSystemInstruction,
-                temperature: 0.85,
-                topP: 0.95,
-                maxOutputTokens: 400,
-              },
+              contents: formattedContents,
+              config: fallbackGenerationConfig,
             });
-
-            const rewritten = (rewriteResponse.text || '').trim();
-            if (rewritten) {
-              reply = rewritten;
-            }
-          } catch {
-            // Preserve the primary generated reply if the optional rewrite pass fails
+          } else {
+            throw innerErr;
           }
         }
 
-        if (reply) {
-          const finalReply = sanitizeAndCapBubbles(reply);
-          return res.json({ text: finalReply, model: modelName });
+        const rawText = response.text || '';
+        const formattedText = formatCharacterBubbles(rawText);
+
+        if (formattedText) {
+          return res.json({
+            text: formattedText,
+            modelUsed: modelName,
+          });
         }
-      } catch (modelErr: unknown) {
-        const msg = modelErr instanceof Error ? modelErr.message : String(modelErr);
-        console.warn(`[EchoVault /api/chat] Model ${modelName} error:`, msg);
-        if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-          modelCooldownUntil[modelName] = Date.now() + 5 * 60 * 1000;
+      } catch (error: any) {
+        lastError = error;
+        const msg = String(error?.message || '');
+
+        if (msg.includes('API_KEY_INVALID') || msg.includes('key not valid')) {
+          break;
         }
-        continue;
       }
     }
 
-    return res.status(200).json({
-      text: '',
-      fallback: true,
-      reason: 'QUOTA_EXHAUSTED_FALLBACK',
-    });
-  } catch (err) {
-    console.error('[EchoVault /api/chat] Unhandled error:', err);
-    return res.status(200).json({
-      text: '',
-      fallback: true,
-      reason: 'FALLBACK',
-    });
-  }
-});
+    if (lastError) {
+      console.warn(
+        'Gemini API error across candidate models:',
+        lastError?.status || lastError?.message || lastError
+      );
+    }
 
-async function startServer() {
-  const isProduction = process.env.NODE_ENV === 'production';
+    return res.status(isQuotaError(lastError) ? 429 : 502).json({
+      error: '⚠️ Gemini API quota / connection error',
+      reason: isQuotaError(lastError) ? 'QUOTA_EXHAUSTED' : 'API_ERROR',
+      details: String(lastError?.message || 'Unable to reach Gemini API'),
+    });
+  });
 
-  if (!isProduction) {
+  if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -546,14 +563,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.use((_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`PulseDirect server running on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 

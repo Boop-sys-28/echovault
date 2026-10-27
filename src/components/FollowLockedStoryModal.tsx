@@ -1,6 +1,7 @@
 import React from 'react';
 import { Lock, UserPlus, X, Sparkles } from 'lucide-react';
 import { Character } from '../types';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface FollowLockedStoryModalProps {
   isOpen: boolean;
@@ -34,8 +35,9 @@ export const FollowLockedStoryModal: React.FC<FollowLockedStoryModalProps> = ({
         <div className="relative mt-2">
           <div className="w-20 h-20 rounded-full p-1 border-2 border-dashed border-amber-400/80 shadow-xl shadow-amber-500/10 flex items-center justify-center">
             <img
-              src={character.avatar}
+              src={resolveAvatarUrl(character.avatar, character.id)}
               alt={character.name}
+              onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-[#131622] bg-[#161a2b] brightness-75"
             />
           </div>

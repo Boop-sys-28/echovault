@@ -10,12 +10,17 @@ import {
   Trash2,
   Settings,
   X,
+  Users,
 } from 'lucide-react';
-import { Character, Message, UserProfile } from '../types';
+import { Character, Message, UserProfile, DynamicGroupRoom } from '../types';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface SidebarProps {
   characters: Character[];
   activeCharId: string;
+  activeGroupRoomId?: string;
+  groupRooms?: DynamicGroupRoom[];
+  userAffinityMap?: Record<string, number>;
   activeConversationIds: string[];
   chats: Record<string, Message[]>;
   unreadCounts: Record<string, number>;
@@ -26,6 +31,7 @@ interface SidebarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   onSelectCharacter: (id: string) => void;
+  onSelectGroupRoom?: (roomId: string) => void;
   onDeleteChat?: (charId: string) => void;
   onClearAllChats?: () => void;
   onOpenStory: (charId: string) => void;
@@ -44,6 +50,9 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   characters,
   activeCharId,
+  activeGroupRoomId = '',
+  groupRooms = [],
+  userAffinityMap = {},
   activeConversationIds,
   chats,
   unreadCounts,
@@ -54,6 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   searchQuery,
   onSearchChange,
   onSelectCharacter,
+  onSelectGroupRoom,
   onDeleteChat,
   onClearAllChats,
   onOpenStory,
@@ -184,8 +194,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
                 >
                   <img
-                    src={char.avatar}
+                    src={resolveAvatarUrl(char.avatar, char.id)}
                     alt={char.name}
+                    onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className={`w-full h-full rounded-full object-cover object-top border-2 border-[#0d0f17] bg-[#161a2b] ${
                       !isFollowed ? 'brightness-75' : isViewed ? 'brightness-90' : ''
                     }`}
@@ -224,6 +235,88 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Conversations List */}
       <div className="flex-1 overflow-y-auto p-2.5 space-y-1">
+        {/* Dynamic Group Rooms Section */}
+        {groupRooms.length > 0 && (
+          <div className="mb-3 pb-2 border-b border-white/10">
+            <div className="flex items-center justify-between px-2 py-1">
+              <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                <Users className="w-3 h-3 text-indigo-400" />
+                <span>Group Channels ({groupRooms.filter(r => r.isUnlocked).length}/{groupRooms.length})</span>
+              </span>
+            </div>
+            <div className="space-y-1 mt-1">
+              {groupRooms.map(room => {
+                const isRoomActive = activeGroupRoomId === room.id;
+                const inviterChar = room.unlockedBy ? characters.find(c => c.id === room.unlockedBy) : undefined;
+                const thresholdSummary = room.memberIds
+                  .map(mid => {
+                    const cfg = room.memberConfigs[mid];
+                    const ch = characters.find(c => c.id === mid);
+                    const cur = userAffinityMap[mid] || 0;
+                    return cfg ? `${ch?.name.split(' ')[0] || mid}: ${cur}/${cfg.requiredAffinity}` : null;
+                  })
+                  .filter(Boolean)
+                  .join(' • ');
+
+                return (
+                  <div
+                    key={room.id}
+                    onClick={() => {
+                      if (room.isUnlocked && onSelectGroupRoom) {
+                        onSelectGroupRoom(room.id);
+                        onCloseMobile();
+                      }
+                    }}
+                    title={
+                      room.isUnlocked
+                        ? `${room.name} (Invited by ${inviterChar?.name || room.unlockedBy})`
+                        : `Locked Group Channel — Reach required affinity with any member to receive an invite: ${thresholdSummary}`
+                    }
+                    className={`p-2.5 rounded-2xl flex items-center justify-between transition ${
+                      !room.isUnlocked
+                        ? 'opacity-65 bg-white/[0.02] border border-dashed border-white/10 cursor-not-allowed'
+                        : isRoomActive
+                        ? 'bg-gradient-to-r from-indigo-500/20 via-purple-500/15 to-transparent border border-indigo-500/40 shadow-sm cursor-pointer'
+                        : 'hover:bg-white/[0.04] border border-transparent cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3 min-w-0 flex-1">
+                      <div className="relative w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center flex-shrink-0">
+                        {room.isUnlocked ? (
+                          <Users className="w-4 h-4 text-indigo-300" />
+                        ) : (
+                          <Lock className="w-4 h-4 text-amber-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <h4 className="text-xs font-semibold text-slate-100 truncate">
+                            {room.name}
+                          </h4>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase flex-shrink-0 ${
+                              room.isUnlocked
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                            }`}
+                          >
+                            {room.isUnlocked ? 'Unlocked' : 'Locked'}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {room.isUnlocked
+                            ? `Invited by ${inviterChar?.name.split(' ')[0] || room.unlockedBy || 'Member'}`
+                            : thresholdSummary}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {activeConversationIds.length > 0 && (
           <div className="flex items-center justify-between px-2 py-1">
             <span className="text-[11px] font-semibold text-slate-400">
@@ -273,7 +366,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           const history = chats[id] || [];
           const lastMsg = history[history.length - 1];
-          const isActive = activeCharId === id;
+          const isActive = !activeGroupRoomId && activeCharId === id;
 
           let preview = 'No messages yet';
           if (lastMsg) {
@@ -296,9 +389,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center space-x-3 min-w-0 flex-1">
                 <div className="relative w-11 h-11 rounded-full overflow-hidden border border-white/10 flex-shrink-0 bg-[#161a2b]">
                   <img
-                    src={char.avatar}
+                    src={resolveAvatarUrl(char.avatar, char.id)}
                     alt={char.name}
-                    className="w-full h-full object-cover object-top group-hover:scale-105 transition"
+                    onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
+                    className="w-full h-full rounded-full object-cover object-top group-hover:scale-105 transition"
                   />
                   {char.online && (
                     <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border border-[#0d0f17]"></span>
@@ -313,11 +407,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     >
                       {char.name}
                     </h4>
-                    {(unreadCounts[id] || 0) > 0 && (
-                      <span className="min-w-4 h-4 px-1.5 rounded-full bg-purple-500 text-white font-semibold text-[10px] flex items-center justify-center flex-shrink-0">
-                        {unreadCounts[id]}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {lastMsg?.timestamp && (
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {new Date(lastMsg.timestamp).toLocaleTimeString('en-US', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true,
+                          })}
+                        </span>
+                      )}
+                      {(unreadCounts[id] || 0) > 0 && (
+                        <span className="min-w-4 h-4 px-1.5 rounded-full bg-purple-500 text-white font-semibold text-[10px] flex items-center justify-center flex-shrink-0">
+                          {unreadCounts[id]}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-[11px] text-slate-400 truncate mt-0.5">{preview}</p>
                 </div>

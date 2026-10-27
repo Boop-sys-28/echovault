@@ -1,4 +1,4 @@
-import { Message, CaiImportResult } from '../types';
+import { Message, CaiImportResult, CharacterImportAnalysisResult, RelationshipScoreBreakdown } from '../types';
 import { extractFactsFromUserMessage } from './memory';
 
 export interface CaiLinkPreset {
@@ -298,3 +298,132 @@ function buildResultFromPreset(preset: CaiLinkPreset, userCodename: string): Cai
     factsExtracted: Array.from(factsSet),
   };
 }
+
+export function parseCaiTranscript(rawText: string, characterName: string): { userMessages: string[]; botMessages: string[] } {
+  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const userMessages: string[] = [];
+  const botMessages: string[] = [];
+
+  let currentSpeaker = '';
+  let currentBuffer = '';
+
+  for (const line of lines) {
+    if (line.toLowerCase().startsWith('user:') || line.toLowerCase().startsWith('you:')) {
+      if (currentSpeaker === 'bot') botMessages.push(currentBuffer.trim());
+      currentSpeaker = 'user';
+      currentBuffer = line.replace(/^(user|you):\s*/i, '');
+    } else if (line.toLowerCase().startsWith(`${characterName.toLowerCase()}:`)) {
+      if (currentSpeaker === 'user') userMessages.push(currentBuffer.trim());
+      currentSpeaker = 'bot';
+      currentBuffer = line.replace(new RegExp(`^${characterName}:\\s*`, 'i'), '');
+    } else {
+      currentBuffer += ` ${line}`;
+    }
+  }
+
+  if (currentSpeaker === 'user') userMessages.push(currentBuffer.trim());
+  if (currentSpeaker === 'bot') botMessages.push(currentBuffer.trim());
+
+  // Fallback if the user pasted raw sentences without "User:" / "You:" prefixes
+  if (userMessages.length === 0 && botMessages.length === 0 && lines.length > 0) {
+    return { userMessages: lines, botMessages: [] };
+  }
+
+  return { userMessages, botMessages };
+}
+
+export function computeAffinityDeltaFromTranscript(
+  userMessages: string[],
+  characterId: string
+): CharacterImportAnalysisResult {
+  let score = 0;
+  const fullText = userMessages.join(' ').toLowerCase();
+
+  // Character-specific sentiment heuristics (e.g., Loona hates clinginess/prying, respects genuine space or treats)
+  if (characterId === 'loona') {
+    const positiveKeywords = ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill'];
+    const negativeKeywords = ['hug me', 'smile', 'obey', 'annoying'];
+
+    positiveKeywords.forEach((w) => {
+      if (fullText.includes(w)) score += 2;
+    });
+    negativeKeywords.forEach((w) => {
+      if (fullText.includes(w)) score -= 3;
+    });
+  } else {
+    // Generic baseline
+    const positiveWords = ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank'];
+    const negativeWords = ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die'];
+
+    positiveWords.forEach((w) => {
+      if (fullText.includes(w)) score += 3;
+    });
+    negativeWords.forEach((w) => {
+      if (fullText.includes(w)) score -= 5;
+    });
+  }
+
+  // Cap delta between -35 and +35 per import
+  const finalDelta = Math.max(-35, Math.min(35, score));
+
+  return {
+    delta: finalDelta,
+    reason: finalDelta >= 0 ? 'Consistent respect and positive rapport.' : 'Boundary pushing, insults, or unearned familiarity.',
+    importedMessageCount: userMessages.length,
+  };
+}
+
+export function getRelationshipTierFromAffinity(
+  affinity: number
+): RelationshipScoreBreakdown['tier'] {
+  if (affinity <= -20) return 'Enemy';
+  if (affinity < 10) return 'Stranger';
+  if (affinity < 25) return 'Acquaintance';
+  if (affinity < 45) return 'Trusted';
+  if (affinity < 70) return 'Close';
+  return 'Devoted';
+}
+
+export function evaluateTurnAffinityChange(
+  userMessageText: string,
+  characterId: string
+): { delta: number; posHits: number; negHits: number } {
+  const lower = userMessageText.toLowerCase();
+  let posHits = 0;
+  let negHits = 0;
+  let delta = 1; // baseline +1 for natural engagement unless negative
+
+  const posWords =
+    characterId === 'loona'
+      ? ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill', 'deftones', 'cool', 'respect']
+      : ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank', 'backup', 'got your back', 'appreciate', 'cool', 'nice', 'good'];
+  const negWords =
+    characterId === 'loona'
+      ? ['hug me', 'smile', 'obey', 'annoying', 'shut up', 'idiot', 'useless', 'hate']
+      : ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die', 'pathetic', 'loser'];
+
+  posWords.forEach((w) => {
+    if (lower.includes(w)) {
+      posHits += 1;
+      delta += 3;
+    }
+  });
+
+  negWords.forEach((w) => {
+    if (lower.includes(w)) {
+      negHits += 1;
+      delta -= 5;
+    }
+  });
+
+  if (negHits > 0 && posHits === 0) {
+    delta = Math.min(-3, delta);
+  }
+
+  return {
+    delta: Math.max(-15, Math.min(12, delta)),
+    posHits,
+    negHits,
+  };
+}
+

@@ -1044,6 +1044,13 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                         >
                           Love how smooth the live preview updates! 🚀
                         </div>
+                        <span className="text-[9px] text-slate-500 font-mono mt-1">
+                          {new Date().toLocaleTimeString('en-US', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true,
+                          })}
+                        </span>
                       </div>
                     </div>
                   </div>

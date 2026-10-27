@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { MicOff, PhoneOff, Volume2, Video } from 'lucide-react';
 import { Character, CallState } from '../types';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface SimulatedCallModalProps {
   callState: CallState;
@@ -26,8 +27,9 @@ export const SimulatedCallModal: React.FC<SimulatedCallModalProps> = ({
         <div className="relative">
           <div className="w-28 h-28 rounded-full p-1 story-gradient animate-pulse shadow-2xl shadow-purple-600/20">
             <img
-              src={character.avatar}
+              src={resolveAvatarUrl(character.avatar, character.id)}
               alt={character.name}
+              onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-zinc-950 bg-[#1a1e2e]"
             />
           </div>

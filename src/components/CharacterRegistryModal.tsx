@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Users, MessageSquare, Music, UserPlus, UserCheck } from 'lucide-react';
 import { Character, Universe } from '../types';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface CharacterRegistryModalProps {
   isOpen: boolean;
@@ -19,17 +20,27 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
   onClose,
   onSelectCharacter,
 }) => {
-  const [filter, setFilter] = useState<'all' | 'helluva' | 'anime' | 're'>('all');
+  const [filter, setFilter] = useState<'all' | 'dc' | 'helluva' | 'anime' | 're'>('all');
 
   if (!isOpen) return null;
 
   const isAnimeUniverse = (u: Universe) =>
     ['jujutsu', 'cyberpunk', 'romcom', 'frieren', 'aot', 'csm', 'anime'].includes(u);
 
+  const isDcUniverse = (u: Universe) =>
+    u === 'DC Universe' || u === 'dc' || u === 'marvel';
+
+  const isHelluvaUniverse = (u: Universe) =>
+    u === 'helluva' || u === 'hellaverse';
+
+  const isReUniverse = (u: Universe) =>
+    u === 're' || u === 'resident_evil';
+
   const filtered = characters.filter(c => {
     if (filter === 'all') return true;
-    if (filter === 'helluva') return c.universe === 'helluva';
-    if (filter === 're') return c.universe === 're';
+    if (filter === 'dc') return isDcUniverse(c.universe);
+    if (filter === 'helluva') return isHelluvaUniverse(c.universe);
+    if (filter === 're') return isReUniverse(c.universe);
     if (filter === 'anime') return isAnimeUniverse(c.universe);
     return true;
   });
@@ -44,7 +55,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
               <Users className="w-4 h-4 text-purple-400" /> Operative & Character Registry
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Select any anime icon, HelluvaVerse operative, or tactical agent to start a fresh chat or view profiles.
+              Select any DC hero, anime icon, HelluvaVerse operative, or tactical agent to start a fresh chat.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition p-1">
@@ -65,6 +76,16 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
             All Characters ({characters.length})
           </button>
           <button
+            onClick={() => setFilter('dc')}
+            className={`px-3 py-1.5 rounded-xl font-semibold transition whitespace-nowrap ${
+              filter === 'dc'
+                ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
+                : 'bg-white/5 hover:bg-white/10 text-slate-300'
+            }`}
+          >
+            DC & Comics ({characters.filter(c => isDcUniverse(c.universe)).length})
+          </button>
+          <button
             onClick={() => setFilter('anime')}
             className={`px-3 py-1.5 rounded-xl font-semibold transition whitespace-nowrap ${
               filter === 'anime'
@@ -82,7 +103,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                 : 'bg-white/5 hover:bg-white/10 text-slate-300'
             }`}
           >
-            HelluvaVerse ({characters.filter(c => c.universe === 'helluva').length})
+            HelluvaVerse ({characters.filter(c => isHelluvaUniverse(c.universe)).length})
           </button>
           <button
             onClick={() => setFilter('re')}
@@ -92,7 +113,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                 : 'bg-white/5 hover:bg-white/10 text-slate-300'
             }`}
           >
-            Resident Evil ({characters.filter(c => c.universe === 're').length})
+            Resident Evil ({characters.filter(c => isReUniverse(c.universe)).length})
           </button>
         </div>
 
@@ -106,9 +127,10 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
               <div className="flex items-center space-x-3 min-w-0">
                 <div className="relative w-12 h-12 rounded-full overflow-hidden border border-white/10 flex-shrink-0 bg-[#161a2b]">
                   <img
-                    src={char.avatar}
+                    src={resolveAvatarUrl(char.avatar, char.id)}
                     alt={char.name}
-                    className="w-full h-full object-cover object-top group-hover:scale-105 transition"
+                    onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
+                    className="w-full h-full rounded-full object-cover object-top group-hover:scale-105 transition"
                   />
                   {char.online && (
                     <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border border-black"></span>

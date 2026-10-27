@@ -1,13 +1,21 @@
 export type Universe =
   | 'helluva'
+  | 'hellaverse'
   | 're'
+  | 'resident_evil'
   | 'jujutsu'
   | 'cyberpunk'
   | 'frieren'
   | 'aot'
   | 'csm'
   | 'romcom'
-  | 'anime';
+  | 'anime'
+  | 'marvel'
+  | 'DC Universe'
+  | 'dc'
+  | 'scifi'
+  | 'fantasy'
+  | string;
 
 export interface UserProfile {
   id: string;
@@ -42,6 +50,8 @@ export interface PhotoPreset {
 export interface Character {
   id: string;
   name: string;
+  fullName?: string;
+  tagline?: string;
   tag: string;
   universe: Universe;
   avatar: string;
@@ -50,8 +60,15 @@ export interface Character {
   storyTime?: string;
   song: string;
   status: string;
+  themeAccent?: string;
   system: string;
   online?: boolean;
+  relationshipLevel?: number;
+  affinity?: number;
+  affection?: number;
+  trustScore?: number;
+  bond?: number;
+  relationshipTier?: 'Stranger' | 'Neutral' | string;
 }
 
 export interface ReplyReference {
@@ -128,4 +145,45 @@ export interface CharacterResponseDirective {
   updatedAt: number;
 }
 
+export interface GroupMemberInviteConfig {
+  characterId: string;
+  requiredAffinity: number;
+  inviteDmText: string;       // In-character DM they send you when threshold is reached
+  groupAddSystemText: string; // The action line displayed in the group backlog
+}
+
+export interface BacklogMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  avatarUrl?: string;
+  text: string;
+  timestamp: string;
+  isSystemDivider?: boolean;
+}
+
+export interface DynamicGroupRoom {
+  id: string;
+  name: string;
+  memberIds: string[];
+  isUnlocked: boolean;
+  unlockedBy?: string;        // The character who actually invited you
+  memberConfigs: Record<string, GroupMemberInviteConfig>;
+  baseBacklog: BacklogMessage[];
+}
+
+export interface RelationshipScoreBreakdown {
+  affinity: number;          // Current affinity score (-100 to +100)
+  tier: 'Enemy' | 'Stranger' | 'Acquaintance' | 'Trusted' | 'Close' | 'Devoted';
+  positiveTriggersCount: number;
+  negativeTriggersCount: number;
+  importedHistorySummary?: string;
+  lastAnalysisTimestamp?: string;
+}
+
+export interface CharacterImportAnalysisResult {
+  delta: number;             // e.g. +25 or -15
+  reason: string;
+  importedMessageCount: number;
+}
 

@@ -310,7 +310,13 @@ export const ThemeCustomizerModal: React.FC<ThemeCustomizerModalProps> = ({
                         Yeah! The preview is updating in real time. Love this {activeThemeDef.name} look! 🚀
                       </span>
                     </div>
-                    <span className="text-[8px] text-slate-500 font-mono mt-0.5">Just now</span>
+                    <span className="text-[8px] text-slate-500 font-mono mt-0.5">
+                      {new Date().toLocaleTimeString('en-US', {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true,
+                      })}
+                    </span>
                   </div>
                 </div>
 
