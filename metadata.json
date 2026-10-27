@@ -1,0 +1,8 @@
+{
+  "name": "PulseDirect // Secure Messaging Network",
+  "description": "Cyberpunk secure direct messaging network with HelluvaVerse and Resident Evil operatives, Sinsta stories, stealth calculator disguise, PIN vault, and dynamic Gemini AI interaction.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
