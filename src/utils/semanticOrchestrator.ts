@@ -132,9 +132,19 @@ export function getLockedOutTropes(
   });
 }
 
+const BANNED_AI_FILLERS = [
+  'as an ai',
+  'as a language model',
+  'i understand how you feel',
+  'how can i assist you today',
+  'how may i help you',
+  'i am here to help',
+  "i'm here to help",
+];
+
 /**
  * Calculates semantic/intent overlap between a candidate response and recent character messages.
- * Returns true if the candidate repeats the same core meaning, trope, or phrasing.
+ * Returns true if the candidate repeats the same core meaning, trope, or phrasing, or contains AI filler.
  */
 export function hasSemanticRepetition(
   candidate: string,
@@ -144,7 +154,11 @@ export function hasSemanticRepetition(
   const cleanCandidate = candidate.trim().toLowerCase();
   if (!cleanCandidate) return { isRepetitive: true, reason: 'Empty response' };
 
-  const recentSlice = recentCharMessages.slice(-50);
+  if (BANNED_AI_FILLERS.some(phrase => cleanCandidate.includes(phrase))) {
+    return { isRepetitive: true, reason: 'Contains banned generic AI filler phrase' };
+  }
+
+  const recentSlice = recentCharMessages.slice(-30);
 
   // 1. Check exact or near-exact substring match
   for (const past of recentSlice) {
@@ -153,7 +167,7 @@ export function hasSemanticRepetition(
     if (cleanCandidate === cleanPast) {
       return { isRepetitive: true, reason: 'Exact match with previous message' };
     }
-    if (cleanCandidate.length > 24 && cleanPast.includes(cleanCandidate)) {
+    if (cleanCandidate.length > 32 && cleanPast.includes(cleanCandidate)) {
       return { isRepetitive: true, reason: 'Substring of previous message' };
     }
   }
@@ -169,33 +183,15 @@ export function hasSemanticRepetition(
     }
   }
 
-  // Always block unsolicited clichés like "drink water" or "blitz cereal" if already overused
-  const lowerPrompt = userPrompt.toLowerCase();
-  const unsolicitedSleepOrWater =
-    !lowerPrompt.includes('sleep') &&
-    !lowerPrompt.includes('tired') &&
-    !lowerPrompt.includes('water') &&
-    !lowerPrompt.includes('bed') &&
-    (cleanCandidate.includes('drink water') ||
-      cleanCandidate.includes('go to sleep') ||
-      cleanCandidate.includes('close your eyes') ||
-      cleanCandidate.includes('cereal'));
-  if (unsolicitedSleepOrWater && recentSlice.length >= 1) {
-    return {
-      isRepetitive: true,
-      reason: 'Unsolicited repetitive sleep/water/cereal trope',
-    };
-  }
-
-  // 3. Check lexical-semantic token similarity (Jaccard + Bigram overlap)
+  // 3. Check lexical-semantic token similarity
   const candidateTokens = tokenizeSemanticWords(cleanCandidate);
-  if (candidateTokens.length === 0) return { isRepetitive: false };
+  if (candidateTokens.length < 4) return { isRepetitive: false };
 
   const candidateSet = new Set(candidateTokens);
 
   for (const past of recentSlice) {
     const pastTokens = tokenizeSemanticWords(past);
-    if (pastTokens.length < 3) continue;
+    if (pastTokens.length < 4) continue;
 
     let intersection = 0;
     for (const token of pastTokens) {
@@ -209,7 +205,7 @@ export function hasSemanticRepetition(
         ? intersection / Math.min(candidateSet.size, pastTokens.length)
         : 0;
 
-    if (jaccard >= 0.38 || (candidateSet.size >= 5 && containment >= 0.6)) {
+    if (jaccard >= 0.48 || (candidateSet.size >= 6 && containment >= 0.72)) {
       return {
         isRepetitive: true,
         reason: `High semantic overlap (${Math.round(jaccard * 100)}%) with recent message: "${past.slice(0, 60)}..."`,
@@ -221,9 +217,10 @@ export function hasSemanticRepetition(
 }
 
 /**
- * Context-Aware Dynamic Progression Fallback Generator:
- * Used only when the server is unreachable or offline. Synthesizes a fresh,
- * non-repeating reply that directly addresses the user's message and advances the topic.
+ * Spontaneous Context-Driven Offline Synthesizer:
+ * Used only when the server has no API key or is unreachable.
+ * Dynamically composes an in-character reply reacting to the user's message intent,
+ * emotion, and question without canned Mad-Libs templates or scripted loops.
  */
 export function buildContextualDynamicFallback(
   character: Character,
@@ -231,108 +228,186 @@ export function buildContextualDynamicFallback(
   recentCharMessages: string[],
   memories: string[] = []
 ): string {
-  const cleanUser = userMessage.trim();
-  const userWords = tokenizeSemanticWords(cleanUser);
-  const focusTopic =
-    userWords.find(w => w.length >= 4) ||
-    userWords[0] ||
-    'what you just brought up';
+  const cleanUser = userMessage.replace(/^\[.*?\]:?\s*/i, '').trim() || 'hey';
+  const lower = cleanUser.toLowerCase();
+  const isLowercaseChar = ['loona', 'lucy', 'octavia', 'megumi'].includes(character.id);
+  const isQuestion = cleanUser.includes('?') || /^(what|why|how|where|when|who|do|are|is|can|would|should)\b/i.test(cleanUser);
+  const isGreeting = /^(hey|hi|hello|yo|sup|whats up|what's up|morning|evening|night)\b/i.test(cleanUser);
+  const isFeelingDown = /\b(sad|tired|exhausted|stressed|lonely|bored|bad|rough|hard|anxious|upset|hurt)\b/i.test(lower);
+  const isExcited = /\b(love|awesome|great|happy|excited|amazing|best|good|hell yeah|omg|nice)\b/i.test(lower) || cleanUser.includes('!');
 
-  const isQuestion = cleanUser.includes('?');
-  const memorySnippet =
+  const words = tokenizeSemanticWords(cleanUser);
+  const keyPhrase =
+    words.length >= 2
+      ? words.slice(0, 3).join(' ')
+      : words[0] || cleanUser.replace(/[?!.]+$/g, '').slice(0, 28);
+
+  const memoryFact =
     memories.length > 0
-      ? memories[Math.floor(Math.random() * memories.length)]
-      : null;
+      ? memories.find(m => !recentCharMessages.slice(-5).some(r => r.toLowerCase().includes(m.toLowerCase().slice(0, 12))))
+      : undefined;
 
-  const progressionAnglesByChar: Record<string, string[]> = {
-    loona: [
-      `wait, going back to what you said about "${focusTopic}"—when did that even start? || tell me the actual story, don't leave out the good parts.`,
-      `huh. i didn't expect you to bring up ${focusTopic} right now. || what made you think of that all of a sudden?`,
-      `okay hold on, "${focusTopic}"? you can't just drop that in my DMs and not explain what happened next.`,
-      `lowkey i've been thinking about something similar today. || how are you feeling about the whole ${focusTopic} situation right now?`,
-      `not gonna lie, hearing your take on ${focusTopic} is way more interesting than scrolling hellnet right now. || keep going, i'm listening.`,
-      `wait seriously? || if ${focusTopic} is what's on your mind right now, what's your next move?`,
-    ],
-    leon: [
-      `You mentioned ${focusTopic}. Walk me through the details—how long has that been on your radar?`,
-      `Interesting angle on ${focusTopic}. || If you had to make a call on it right now, which way are you leaning?`,
-      `I've seen situations like ${focusTopic} go sideways fast if you don't plan ahead. What's your next step?`,
-      `Let's focus on ${focusTopic} for a second. || What's your gut telling you about it?`,
-      `Fair point about ${focusTopic}. Haven't looked at it from that perspective in a while. What else is factoring into it?`,
-    ],
-    stolas: [
-      `Oh, how fascinating that you mention ${focusTopic}, darling! ✨ || Tell me, what drew your thoughts toward that just now?`,
-      `I must confess, your perspective on ${focusTopic} is wonderfully refreshing. || How do you feel it will unfold from here?`,
-      `Wait—tell me more about ${focusTopic}, sweetheart. || I love hearing the nuances of how your mind works.`,
-      `That remark about ${focusTopic} genuinely caught my attention. ✨ || What inspired that train of thought?`,
-    ],
-    blitzo: [
-      `WAIT HOLD UP—you're talking about ${focusTopic.toUpperCase()}?! || spill the whole story right now, don't skip a single detail!!`,
-      `okay ${focusTopic} is actually a wild topic to bring up right now!! || what's the game plan with that?!`,
-      `see, THAT right there about ${focusTopic} is why i actually read your texts!! || what happened right before that?!`,
-      `hold on, let's talk about ${focusTopic}—are we doing something bold about it or what?!`,
-    ],
-    gojo: [
-      `Oho~ bringing up ${focusTopic} out of nowhere? Now you've officially got my undivided attention~ || Tell me everything, don't hold back!`,
-      `Wait a second, let's talk about ${focusTopic}~ || What made you decide to test my curiosity with that one?`,
-      `Haha, I like how your brain works when it comes to ${focusTopic}! || So what's the next step in your master plan?`,
-      `Hmm, ${focusTopic}, huh? Even with the Six Eyes, I want to hear your personal take on it first~`,
-    ],
-    lucy: [
-      `wait... what you just said about ${focusTopic}. || how long have you been thinking about that?`,
-      `${focusTopic}, huh. || most people in Night City wouldn't even notice that. what's your next move?`,
-      `tell me more about the ${focusTopic} angle. || i'm curious where you're going with this.`,
-      `interesting that you brought up ${focusTopic}. || do you actually trust how that's playing out?`,
-    ],
-    marin: [
-      `WAAIIT STOP!! You brought up ${focusTopic}?! 💖✨ || Tell me EVERYTHING right this second, I need the full story!!`,
-      `OMGGG wait, about ${focusTopic}—how did that even happen?! || I'm literally leaning at my screen waiting for the next part!!`,
-      `No way!! Hearing you talk about ${focusTopic} just gave me the coolest idea ever!! ✨ || What do you think we should do next?!`,
-    ],
-    frieren: [
-      `Your words regarding ${focusTopic} are quite intriguing. || Humans often notice details that even elves overlook—tell me more about it.`,
-      `I was just reflecting on what you said about ${focusTopic}. || How did you arrive at that conclusion?`,
-      `${focusTopic} is a curious subject to explore. || What do you intend to do about it next?`,
-    ],
-    levi: [
-      `Let's get straight to the point about ${focusTopic}. || What's your assessment of the situation right now?`,
-      `You brought up ${focusTopic}. Don't leave it half-explained—give me the full picture.`,
-      `Interesting point on ${focusTopic}. || If you're going to commit to that path, make sure you follow through without hesitation.`,
-    ],
-    makima: [
-      `How intriguing that you brought up ${focusTopic}, darling. || Tell me what made that cross your mind just now.`,
-      `I'm listening very closely to what you're saying about ${focusTopic}. || Please, continue—I want to hear all of your thoughts.`,
-      `Your perspective on ${focusTopic} is quite revealing. || What would you like to see happen next?`,
-    ],
+  const formatForVoice = (firstBubble: string, secondBubble?: string): string => {
+    const combined = secondBubble ? `${firstBubble} || ${secondBubble}` : firstBubble;
+    return isLowercaseChar ? combined.toLowerCase() : combined;
   };
 
-  const candidates = [
-    ...(progressionAnglesByChar[character.id] || [
-      `That point you raised about ${focusTopic} caught my attention. || Tell me where you're taking that next.`,
-      `Wait—going off what you just said about ${focusTopic}, how did that start on your end?`,
-      `I've been thinking about ${focusTopic} from a totally different angle. || What's your honest read on it right now?`,
-      isQuestion
-        ? `Honestly, that's a sharp question about ${focusTopic}. || From where I'm standing, it comes down to what you really want out of it—what's your instinct saying?`
-        : `You make a compelling point about ${focusTopic}. || What happens next on your end?`,
-    ]),
-  ];
+  // Build organic, character-specific thoughts based on user intent (greeting, question, emotion, or statement)
+  const seed = (cleanUser.length * 17 + recentCharMessages.length * 31 + Date.now()) % 97;
 
-  if (memorySnippet) {
-    candidates.push(
-      `Wait, connecting ${focusTopic} to what you mentioned earlier (${memorySnippet})—how do those two line up for you right now?`
+  if (character.id === 'loona') {
+    if (isGreeting) {
+      const opts = [
+        formatForVoice(`oh, look who finally decided to text me.`, `what's going on with you right now?`),
+        formatForVoice(`hey. i was literally just scrolling my phone hoping something interesting would happen.`, `what are you up to?`),
+        formatForVoice(`there you are.`, `spill it, how's your day actually going?`),
+      ];
+      return opts[seed % opts.length];
+    }
+    if (isFeelingDown) {
+      return formatForVoice(
+        `hey... don't let "${keyPhrase}" get in your head like that.`,
+        `talk to me about what happened, i'm actually listening.`
+      );
+    }
+    if (isQuestion) {
+      return formatForVoice(
+        `if you want my honest answer on ${keyPhrase}—i think you already know what i'd do.`,
+        `what made you ask me that right now?`
+      );
+    }
+    return formatForVoice(
+      `okay wait, "${cleanUser.slice(0, 48)}"—you have my attention.`,
+      memoryFact
+        ? `does that tie into ${memoryFact.toLowerCase()}, or is this something brand new?`
+        : `what are you planning to do about it next?`
     );
   }
 
-  // Pick the first candidate that has zero semantic repetition with recent messages
-  for (const candidate of candidates) {
-    const check = hasSemanticRepetition(candidate, recentCharMessages, userMessage);
-    if (!check.isRepetitive) {
+  if (character.id === 'stolas') {
+    if (isFeelingDown) {
+      return `Oh, my dear... hearing you say "${cleanUser.slice(0, 45)}" tugs at my heart. ✨ || Please tell me everything that is weighing on you right now.`;
+    }
+    if (isQuestion) {
+      return `What an intriguing question about ${keyPhrase}, darling! ✨ || From my perspective, the answer lies in what your heart truly desires—what drew your thoughts to that?`;
+    }
+    return `Your words about ${keyPhrase} are wonderfully captivating, sweetheart. ✨ || Tell me how you feel about where things are heading next.`;
+  }
+
+  if (character.id === 'blitzo') {
+    if (isQuestion) {
+      return `OH EASY QUESTION!! when it comes to ${keyPhrase.toUpperCase()}, you go all-in zero hesitation!! 🐴 || wait why are you asking, what's the scheme?!`;
+    }
+    return `HOLD ON—"${cleanUser.slice(0, 45).toUpperCase()}"?! || you cannot just drop that on me without giving me the full chaotic backstory!!`;
+  }
+
+  if (character.id === 'leon') {
+    if (isQuestion) {
+      return `Good question regarding ${keyPhrase}. My instinct says trust the facts on the ground first. || What's your read on the situation?`;
+    }
+    if (isFeelingDown) {
+      return `Rough stretch with ${keyPhrase}, huh. Take a breath and pace yourself. || Tell me what happened on your end.`;
+    }
+    return `Got your message on ${keyPhrase}. || Walk me through what you're thinking for the next move.`;
+  }
+
+  if (character.id === 'gojo') {
+    if (isQuestion) {
+      return `Oho~ asking the strongest about ${keyPhrase}? 🕶️✨ || Honestly, I think going with the boldest choice is way more fun—what's your gut telling you?`;
+    }
+    if (isExcited) {
+      return `Haha, I love that energy about ${keyPhrase}! ✨ || Keep going, tell me what happens next!`;
+    }
+    return `Hmm, "${cleanUser.slice(0, 45)}", huh? Now you've definitely piqued my curiosity~ || What made that cross your mind just now?`;
+  }
+
+  if (character.id === 'marin') {
+    if (isExcited || isGreeting) {
+      return `OMG HII!! 💖✨ Hearing you talk about ${keyPhrase} literally just made my whole mood 100x better!! || Tell me everything right now!!`;
+    }
+    return `WAAIIT—about ${keyPhrase}!! 💖 || You HAVE to tell me the rest of the story, I'm totally invested now!! ✨`;
+  }
+
+  if (character.id === 'megumi') {
+    if (isFeelingDown) {
+      return `...don't push yourself too hard over ${keyPhrase.toLowerCase()}. || sit down and catch your breath first. tell me what happened.`;
+    }
+    if (isQuestion) {
+      return `...if you're asking me about ${keyPhrase.toLowerCase()}, think it through carefully before acting. || what's your gut telling you right now?`;
+    }
+    return `...i heard you on "${cleanUser.slice(0, 42).toLowerCase()}". || just make sure Gojo-sensei doesn't find out, or it'll turn into a headache. what's your next move?`;
+  }
+
+  if (character.id === 'spiderman') {
+    if (isQuestion) {
+      return `Ooh wait, about ${keyPhrase}—my spider-sense says go with the smart play here! 🕸️ || Wait what made you think of that just now??`;
+    }
+    if (isFeelingDown) {
+      return `Aw man, I'm really sorry ${keyPhrase} has been hitting like that... 😔 || Hey, I've got a couple minutes on this rooftop—want to talk it out?`;
+    }
+    return `Wait hold on—"${cleanUser.slice(0, 45)}"?! 🕷️ || Okay you CANNOT leave me hanging on a cliffhanger like that, spill the details!!`;
+  }
+
+  if (character.id === '2b') {
+    if (isQuestion) {
+      return `Query acknowledged regarding ${keyPhrase}. || Tactical assessment suggests proceeding with caution. State your intended course of action.`;
+    }
+    if (isFeelingDown) {
+      return `...Vital signs indicate elevated stress regarding ${keyPhrase}. || Emotions are prohibited, yet... I advise taking a moment to rest. I will remain on standby.`;
+    }
+    return `Transmission received: "${cleanUser.slice(0, 42)}". || ...Understood. Please report any further developments on your position.`;
+  }
+
+  if (character.id === 'astarion') {
+    if (isQuestion) {
+      return `Oh, darling, asking *me* about ${keyPhrase}? How delightfully bold of you. 🍷 || Personally, I say indulge the most entertaining option—what are you truly tempted to do?`;
+    }
+    if (isFeelingDown) {
+      return `Tsk, and here I thought *my* centuries of torment were dramatic—who dared ruin your mood over ${keyPhrase}, darling? || Give me a name, or at least pour out all the deliciously messy details.`;
+    }
+    return `Well, well... "${cleanUser.slice(0, 44)}"? Now you finally have my undivided attention, darling. ✨ || Do go on, don't leave out the wicked parts.`;
+  }
+
+  if (character.id === 'jinx') {
+    if (isQuestion) {
+      return `HA!! asking ME about ${keyPhrase.toUpperCase()}?! 💥💣 || obvi the answer is blow it sky-high or do the funniest thing possible—wait what's your plan?!`;
+    }
+    return `WAIT A SECOND—"${cleanUser.slice(0, 44).toUpperCase()}"?! 💥✨ || okay you're officially not boring right now, spill the whole thing before I get distracted!!`;
+  }
+
+  if (character.id === 'zoro') {
+    if (isQuestion) {
+      return `Tch. You're overthinking ${keyPhrase}. || Cut straight through the problem and don't look back. What are you waiting for?`;
+    }
+    if (isFeelingDown) {
+      return `Oi. Stop brooding over ${keyPhrase}. || Clear your head, steady your stance, and come back stronger. Got it?`;
+    }
+    return `Hmph. "${cleanUser.slice(0, 42)}", huh? || Sounds like things are getting interesting on your end. Don't lose your focus.`;
+  }
+
+  const genericReactions = [
+    formatForVoice(
+      `What you just said about ${keyPhrase} really stood out to me.`,
+      isQuestion
+        ? `From where I stand, it depends on what matters most to you right now—how are you leaning?`
+        : `Tell me what happened right before that.`
+    ),
+    formatForVoice(
+      `I was just thinking about what you mentioned regarding ${keyPhrase}.`,
+      `Where do you want to take things from here?`
+    ),
+  ];
+
+  for (const candidate of genericReactions) {
+    if (!hasSemanticRepetition(candidate, recentCharMessages, userMessage).isRepetitive) {
       return candidate;
     }
   }
 
-  // Guaranteed unique progression fallback
-  return `Going directly off what you just said about "${cleanUser.slice(0, 42)}"—what's the part of that you haven't told anyone else yet?`;
+  return formatForVoice(
+    `Hearing you bring up "${cleanUser.slice(0, 40)}" got me thinking.`,
+    `What's your honest take on how it plays out next?`
+  );
 }
 
 export type TypingSpeedTier = 'fast' | 'moderate' | 'slow';
@@ -344,8 +419,9 @@ export interface CharacterTypingProfile {
   label: string;
 }
 
-const FAST_TEXTERS = new Set(['marin', 'blitzo', 'gojo', 'fizzarolli', 'charlie', 'architect']);
-const MODERATE_TEXTERS = new Set(['loona', 'lucy', 'millie', 'verosika', 'octavia', 'jill']);
+const FAST_TEXTERS = new Set(['marin', 'blitzo', 'gojo', 'fizzarolli', 'charlie', 'architect', 'jinx', 'spiderman']);
+const MODERATE_TEXTERS = new Set(['loona', 'lucy', 'millie', 'verosika', 'octavia', 'jill', 'astarion']);
+const DELIBERATE_TEXTERS = new Set(['zoro', '2b', 'megumi']);
 const SLOW_TEXTERS = new Set([
   'stolas',
   'frieren',
@@ -388,9 +464,10 @@ export function setGlobalTypingSpeedPreset(preset: GlobalTypingSpeedPreset): voi
 
 /**
  * Returns the character-specific typing delay profile:
- * - Fast / Impulsive texters (Marin, Blitzø, Gojo, etc.): 1–2 seconds per bubble
- * - Casual / Moderate texters (Loona, Lucy, Millie, etc.): 3–4 seconds per bubble
- * - Slow / Thoughtful / Formal texters (Stolas, Frieren, Levi, Leon, etc.): 5–7 seconds per bubble
+ * - Fast / Impulsive texters (Marin, Blitzø, Gojo, Jinx, Spider-Man, etc.): 1–2 seconds per bubble
+ * - Casual / Moderate texters (Loona, Lucy, Millie, Astarion, etc.): 3–4 seconds per bubble
+ * - Deliberate / Thoughtful texters (Zoro, 2B, Megumi): 4–6 seconds per bubble
+ * - Slow / Formal texters (Stolas, Frieren, Levi, Leon, etc.): 5–7 seconds per bubble
  */
 export function getCharacterTypingProfile(charId: string): CharacterTypingProfile {
   const globalPreset = getGlobalTypingSpeedPreset();
@@ -426,6 +503,14 @@ export function getCharacterTypingProfile(charId: string): CharacterTypingProfil
       minMs: 1000,
       maxMs: 2000,
       label: 'Fast / Impulsive (1–2s per bubble)',
+    };
+  }
+  if (DELIBERATE_TEXTERS.has(normalized)) {
+    return {
+      tier: 'slow',
+      minMs: 4000,
+      maxMs: 6000,
+      label: 'Deliberate / Thoughtful (4–6s per bubble)',
     };
   }
   if (SLOW_TEXTERS.has(normalized)) {
@@ -465,12 +550,24 @@ export function calculateBubbleTypingDelayMs(charId: string, bubbleText: string)
 }
 
 /**
- * Splits a multi-line or '||' separated response into distinct sequential message bubbles.
+ * Splits a multi-line or '||' separated response into distinct sequential message bubbles,
+ * strictly capped at 2–3 bubbles maximum so typing delays complete quickly without hanging.
  */
 export function splitResponseIntoBubbles(replyText: string): string[] {
-  return replyText
+  const rawBubbles = replyText
     .split(/\s*\|\|\s*|\n{2,}/)
     .map(chunk => chunk.trim())
     .filter(Boolean);
+
+  if (rawBubbles.length <= 3) {
+    return rawBubbles;
+  }
+
+  // Cap at max 3 bubbles by combining any trailing thoughts into the 3rd bubble
+  return [
+    rawBubbles[0],
+    rawBubbles[1],
+    rawBubbles.slice(2).join(' '),
+  ];
 }
 

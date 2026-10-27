@@ -538,16 +538,25 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
             {/* Active Session Mini Card in Left Nav Footer */}
             <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2 mt-4">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-xs font-bold text-purple-300 flex-shrink-0">
-                  {(userProfile.codename || 'O')[0].toUpperCase()}
-                </div>
+                {userProfile.avatarUrl ? (
+                  <img
+                    src={userProfile.avatarUrl}
+                    alt={userProfile.codename}
+                    referrerPolicy="no-referrer"
+                    className="w-8 h-8 rounded-full object-cover border border-purple-500/40 flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-xs font-bold text-purple-300 flex-shrink-0">
+                    {(userProfile.codename || 'O')[0].toUpperCase()}
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-semibold text-white truncate">
                     {userProfile.codename || 'Operative_07'}
                   </p>
-                  <p className="text-[10px] text-emerald-400 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                    Session Active
+                  <p className="text-[10px] text-emerald-400 flex items-center gap-1 truncate">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></span>
+                    <span className="truncate">{userProfile.email || 'Session Active'}</span>
                   </p>
                 </div>
               </div>
@@ -575,20 +584,36 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                 {/* Current Operative Identity Banner */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-950/50 via-purple-950/40 to-zinc-900/60 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-3.5">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center text-xl font-extrabold text-white shadow-lg shadow-purple-600/25 flex-shrink-0">
-                      {(userProfile.codename || userProfile.username || 'O')[0].toUpperCase()}
-                    </div>
+                    {userProfile.avatarUrl ? (
+                      <img
+                        src={userProfile.avatarUrl}
+                        alt={userProfile.codename}
+                        referrerPolicy="no-referrer"
+                        className="w-14 h-14 rounded-2xl object-cover border border-purple-500/40 shadow-lg shadow-purple-600/25 flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center text-xl font-extrabold text-white shadow-lg shadow-purple-600/25 flex-shrink-0">
+                        {(userProfile.codename || userProfile.username || 'O')[0].toUpperCase()}
+                      </div>
+                    )}
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-bold text-white">
                           {userProfile.codename || 'Operative_07'}
                         </h3>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono">
-                          Verified Profile
+                          {userProfile.provider === 'google' ? 'Google Verified' : 'Verified Profile'}
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Account Handle: <span className="text-slate-200 font-mono">@{userProfile.username || 'Operative_07'}</span>
+                        {userProfile.email ? (
+                          <>
+                            {userProfile.provider === 'google' ? 'Google Account:' : 'Email:'}{' '}
+                            <span className="text-slate-200 font-mono">{userProfile.email}</span>
+                          </>
+                        ) : (
+                          <>Account Handle: <span className="text-slate-200 font-mono">@{userProfile.username || 'Operative_07'}</span></>
+                        )}
                       </p>
                     </div>
                   </div>

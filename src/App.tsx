@@ -341,6 +341,29 @@ export default function App() {
     setCurrentUser(updated);
     try {
       localStorage.setItem('pulsedirect_current_user', JSON.stringify(updated));
+      const rawAccounts = localStorage.getItem('pulsedirect_registered_users');
+      if (rawAccounts) {
+        const accounts = JSON.parse(rawAccounts);
+        if (Array.isArray(accounts)) {
+          const syncedAccounts = accounts.map((acc: Record<string, unknown>) => {
+            if (
+              acc.id === updated.id ||
+              (updated.email &&
+                typeof acc.email === 'string' &&
+                acc.email.toLowerCase() === updated.email.toLowerCase())
+            ) {
+              return {
+                ...acc,
+                username: updated.username,
+                codename: updated.codename,
+                avatarColor: updated.avatarColor,
+              };
+            }
+            return acc;
+          });
+          localStorage.setItem('pulsedirect_registered_users', JSON.stringify(syncedAccounts));
+        }
+      }
     } catch {
       // ignore
     }
@@ -468,11 +491,10 @@ export default function App() {
     return `${prefix}${baseText}`;
   };
 
-  // Context-Aware Non-Repeating Fallback Selector with Semantic Deduplication
+  // Context-Aware Non-Repeating Fallback Selector (used only when server has no API key / is unreachable)
   const getSmartOfflineResponse = (charId: string, query: string): string => {
     const char = characters.find(c => c.id === charId) || DEFAULT_CHARACTERS[0];
     const q = query.toLowerCase();
-    const pool = OFFLINE_DIALOGUE[charId] || OFFLINE_DIALOGUE.loona;
 
     if (!usedLinesPerCharRef.current[charId]) {
       usedLinesPerCharRef.current[charId] = new Set<string>();
@@ -485,31 +507,29 @@ export default function App() {
 
     const activeMemories = charMemories[charId] || getCharacterMemories(charId);
 
-    // Only use specialized photo/away pools when explicitly triggered; otherwise use dynamic progression
-    let candidateLines: string[] = [];
-    if (q.includes('[away]')) {
-      candidateLines = pool.away || [];
-    } else if (q.includes('[user_photo]')) {
-      candidateLines = pool.user_photo || [];
-    } else if (q.includes('pic') || q.includes('selfie') || q.includes('photo')) {
-      candidateLines = pool.photo || [];
-    }
-
-    for (const line of candidateLines) {
-      const semCheck = hasSemanticRepetition(line, recentCharTexts, query);
-      if (!semCheck.isRepetitive && !usedLinesPerCharRef.current[charId].has(line.trim().toLowerCase())) {
-        usedLinesPerCharRef.current[charId].add(line.trim().toLowerCase());
-        return applyDirectiveToOfflineReply(charId, line);
-      }
-    }
-
-    // Synthesize a context-aware dynamic progression response anchored on the user's message
     const dynamicReply = buildContextualDynamicFallback(
       char,
       query,
       recentCharTexts,
       activeMemories
     );
+
+    if (q.includes('pic') || q.includes('selfie') || q.includes('photo')) {
+      const photoTokens: Record<string, string> = {
+        loona: '[PHOTO_DROP:loona_bed] ',
+        leon: '[PHOTO_DROP:leon_desk] ',
+        stolas: '[PHOTO_DROP:stolas_locket] ',
+        gojo: '[PHOTO_DROP:gojo_shinjuku] ',
+        lucy: '[PHOTO_DROP:lucy_balcony] ',
+        marin: '[PHOTO_DROP:marin_cosplay] ',
+        frieren: '[PHOTO_DROP:frieren_lake] ',
+        levi: '[PHOTO_DROP:levi_tea] ',
+        makima: '[PHOTO_DROP:makima_office] ',
+      };
+      const token = photoTokens[charId] || '';
+      return applyDirectiveToOfflineReply(charId, `${token}${dynamicReply}`);
+    }
+
     usedLinesPerCharRef.current[charId].add(dynamicReply.trim().toLowerCase());
     return applyDirectiveToOfflineReply(charId, dynamicReply);
   };
@@ -636,47 +656,40 @@ export default function App() {
     const requestStart = Date.now();
     let replyText = '';
     const historyContext = (burnerMode ? burnerChats[char.id] : chats[char.id]) || [];
-    const pastCharTexts = historyContext.filter(m => m.sender === 'char').map(m => m.text);
 
-    if (hasServerAi) {
-      try {
-        const directive = getCharacterDirective(char.id);
-        const baseSystem = directive.systemOverride || char.system;
-        const directiveBlock = buildDirectivePromptBlock(char.id);
+    try {
+      const directive = getCharacterDirective(char.id);
+      const baseSystem = directive.systemOverride || char.system;
+      const directiveBlock = buildDirectivePromptBlock(char.id);
 
-        const memories = charMemories[char.id] || getCharacterMemories(char.id);
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${currentUser?.codename || 'them'}. Send a fresh, natural check-in message or share something new that just happened on your end. Do NOT repeat any previous message or trope. Use ' || ' if sending two thoughts.`,
-            systemInstruction: `${baseSystem}${directiveBlock}`,
-            memories: memories.slice(0, 75),
-            history: historyContext.slice(-50).map(m => ({
-              role: m.sender === 'user' ? 'user' : 'model',
-              text: m.text,
-            })),
-          }),
-        });
+      const memories = charMemories[char.id] || getCharacterMemories(char.id);
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${currentUser?.codename || 'them'}. Send a spontaneous, natural check-in text or share something new happening on your end in your canon voice. Max 2 short bubbles separated by ' || '.`,
+          systemInstruction: `${baseSystem}${directiveBlock}`,
+          memories: memories.slice(0, 75),
+          history: historyContext.slice(-50).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          })),
+        }),
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          if (data.text) {
-            replyText = data.text;
-          }
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text && String(data.text).trim()) {
+          replyText = String(data.text).trim();
+          if (!hasServerAi) setHasServerAi(true);
         }
-      } catch {
-        // Fallback to offline
       }
+    } catch {
+      // Fallback to offline synthesizer only if network/server fails
     }
 
-    if (replyText) {
-      const semCheck = hasSemanticRepetition(replyText, pastCharTexts, '[AWAY]');
-      if (semCheck.isRepetitive) {
-        replyText = getSmartOfflineResponse(char.id, '[AWAY]');
-      }
-    } else {
-      replyText = getSmartOfflineResponse(char.id, '[AWAY]');
+    if (!replyText) {
+      replyText = getSmartOfflineResponse(char.id, 'hey, checking in on you');
     }
 
     const elapsedMs = Date.now() - requestStart;
@@ -790,7 +803,7 @@ export default function App() {
     document.title = 'EchoVault';
   };
 
-  // Submit User Message with Zero Semantic Repetition & Personality-Based Sequential Typing
+  // Submit User Message with Spontaneous Context-Driven AI Generation & Sequential Typing
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || !activeChar) return;
 
@@ -844,54 +857,46 @@ export default function App() {
 
     const requestStart = Date.now();
     const historyContext = (burnerMode ? burnerChats[activeChar.id] : chats[activeChar.id]) || [];
-    const pastCharTexts = historyContext.filter(m => m.sender === 'char').map(m => m.text);
     const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
 
     let replyText = '';
 
-    if (hasServerAi) {
-      try {
-        let promptPayload = text;
-        if (currentReply) {
-          promptPayload = `[IN REPLY TO PREVIOUS MESSAGE: "${currentReply.text}" by ${currentReply.senderName}]: ${text}`;
-        }
-
-        const directive = getCharacterDirective(activeChar.id);
-        const baseSystem = directive.systemOverride || activeChar.system;
-        const directiveBlock = buildDirectivePromptBlock(activeChar.id);
-
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: promptPayload,
-            systemInstruction: `${baseSystem}${directiveBlock}`,
-            memories: memories.slice(0, 75),
-            history: historyContext.slice(-50).map(m => ({
-              role: m.sender === 'user' ? 'user' : 'model',
-              text: m.text,
-            })),
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.text) {
-            replyText = data.text;
-          }
-        }
-      } catch {
-        // Fallback
+    try {
+      let promptPayload = text.trim();
+      if (currentReply) {
+        promptPayload = `[Replying directly to "${currentReply.text}" from ${currentReply.senderName}]: ${text.trim()}`;
       }
+
+      const directive = getCharacterDirective(activeChar.id);
+      const baseSystem = directive.systemOverride || activeChar.system;
+      const directiveBlock = buildDirectivePromptBlock(activeChar.id);
+
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: promptPayload,
+          systemInstruction: `${baseSystem}${directiveBlock}`,
+          memories: memories.slice(0, 75),
+          history: historyContext.slice(-50).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          })),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text && String(data.text).trim()) {
+          replyText = String(data.text).trim();
+          if (!hasServerAi) setHasServerAi(true);
+        }
+      }
+    } catch {
+      // Only fall back if network request fails
     }
 
-    // Zero Semantic Repetition Verification Gate before sending any text
-    if (replyText) {
-      const semCheck = hasSemanticRepetition(replyText, pastCharTexts, text);
-      if (semCheck.isRepetitive) {
-        replyText = getSmartOfflineResponse(activeChar.id, text);
-      }
-    } else {
+    if (!replyText) {
       replyText = getSmartOfflineResponse(activeChar.id, text);
     }
 
@@ -980,43 +985,43 @@ export default function App() {
     setIsTyping(true);
     const requestStart = Date.now();
     const historyContext = (burnerMode ? burnerChats[activeChar.id] : chats[activeChar.id]) || [];
-    const pastCharTexts = historyContext.filter(m => m.sender === 'char').map(m => m.text);
     let replyText = '';
 
-    if (hasServerAi) {
-      try {
-        const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
-        const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"\n(React directly to this photo that the user shared with you! Make a specific observation, tease them, compliment them, or ask a question about it in your canonical voice!)`;
+    try {
+      const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
+      const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"\n(React directly to this photo and caption that the user shared with you in your canonical voice! Max 2–3 short bubbles separated by ' || '.)`;
 
-        const directive = getCharacterDirective(activeChar.id);
-        const baseSystem = directive.systemOverride || activeChar.system;
-        const directiveBlock = buildDirectivePromptBlock(activeChar.id);
+      const directive = getCharacterDirective(activeChar.id);
+      const baseSystem = directive.systemOverride || activeChar.system;
+      const directiveBlock = buildDirectivePromptBlock(activeChar.id);
 
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: promptPayload,
-            systemInstruction: `${baseSystem}${directiveBlock}`,
-            memories: memories.slice(0, 75),
-            history: historyContext.slice(-50).map(m => ({
-              role: m.sender === 'user' ? 'user' : 'model',
-              text: m.text,
-            })),
-          }),
-        });
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: promptPayload,
+          systemInstruction: `${baseSystem}${directiveBlock}`,
+          memories: memories.slice(0, 75),
+          history: historyContext.slice(-50).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          })),
+        }),
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          if (data.text) replyText = data.text;
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text && String(data.text).trim()) {
+          replyText = String(data.text).trim();
+          if (!hasServerAi) setHasServerAi(true);
         }
-      } catch {
-        // fallback
       }
+    } catch {
+      // fallback
     }
 
-    if (!replyText || hasSemanticRepetition(replyText, pastCharTexts, caption || '[USER_PHOTO]').isRepetitive) {
-      replyText = getSmartOfflineResponse(activeChar.id, `[USER_PHOTO] ${caption}`);
+    if (!replyText) {
+      replyText = getSmartOfflineResponse(activeChar.id, caption.trim() || 'check out this photo');
     }
 
     const elapsedMs = Date.now() - requestStart;

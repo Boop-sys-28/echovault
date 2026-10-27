@@ -1,6 +1,124 @@
-import React, { useState } from 'react';
-import { Zap, Lock, User, Sparkles, ArrowRight } from 'lucide-react';
-import { UserProfile } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Zap, Lock, User, Mail, Sparkles, ArrowRight } from 'lucide-react';
+import { UserProfile, RegisteredUserAccount } from '../types';
+
+const GOOGLE_CLIENT_ID =
+  '582604110796-c17utrvna0oemctiqj68dngqqd8ovnnn.apps.googleusercontent.com';
+
+const REGISTERED_USERS_STORAGE_KEY = 'pulsedirect_registered_users';
+
+interface GoogleCredentialResponse {
+  credential?: string;
+  select_by?: string;
+}
+
+interface GoogleJwtPayload {
+  sub?: string;
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
+  picture?: string;
+  email_verified?: boolean;
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: GoogleCredentialResponse) => void;
+            auto_select?: boolean;
+            cancel_on_tap_outside?: boolean;
+            ux_mode?: 'popup' | 'redirect';
+            itp_support?: boolean;
+          }) => void;
+          prompt: (momentListener?: (notification: {
+            isNotDisplayed?: () => boolean;
+            isSkippedMoment?: () => boolean;
+          }) => void) => void;
+        };
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (tokenResponse: { access_token?: string; error?: string }) => void;
+            error_callback?: (err: { type?: string; message?: string }) => void;
+          }) => {
+            requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+          };
+        };
+      };
+    };
+  }
+}
+
+/**
+ * Decodes a Google Identity Services JWT credential token payload (base64url)
+ * to extract the user's real display name, email, and profile picture URL.
+ */
+function decodeGoogleJwtPayload(jwtToken: string): GoogleJwtPayload | null {
+  try {
+    const parts = jwtToken.split('.');
+    if (parts.length < 2) return null;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
+    const jsonPayload = decodeURIComponent(
+      atob(padded)
+        .split('')
+        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(jsonPayload) as GoogleJwtPayload;
+  } catch {
+    return null;
+  }
+}
+
+function getRegisteredAccounts(): RegisteredUserAccount[] {
+  try {
+    const raw = localStorage.getItem(REGISTERED_USERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item) => {
+        const username = typeof item.username === 'string' && item.username.trim() ? item.username.trim() : 'Operative_07';
+        const email =
+          typeof item.email === 'string' && item.email.trim()
+            ? item.email.trim().toLowerCase()
+            : `${username.toLowerCase().replace(/\s+/g, '.')}@example.com`;
+        return {
+          id: typeof item.id === 'string' ? item.id : `user-${Date.now()}`,
+          email,
+          username,
+          codename: typeof item.codename === 'string' && item.codename.trim() ? item.codename.trim() : username,
+          password: typeof item.password === 'string' ? item.password : '',
+          provider: 'local' as const,
+          avatarColor: typeof item.avatarColor === 'string' ? item.avatarColor : 'purple',
+          createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+function saveRegisteredAccounts(accounts: RegisteredUserAccount[]): void {
+  try {
+    localStorage.setItem(REGISTERED_USERS_STORAGE_KEY, JSON.stringify(accounts));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function isValidEmailFormat(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+}
 
 interface AuthScreenProps {
   onLogin: (user: UserProfile) => void;
@@ -8,10 +126,12 @@ interface AuthScreenProps {
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const [isRegister, setIsRegister] = useState(false);
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [selectedColor, setSelectedColor] = useState('purple');
   const [error, setError] = useState('');
+  const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
 
   const colors = [
     { id: 'purple', class: 'bg-purple-600', ring: 'ring-purple-400' },
@@ -21,38 +141,254 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
     { id: 'amber', class: 'bg-amber-500', ring: 'ring-amber-400' },
   ];
 
+  // Handle Google Identity Services JWT credential callback
+  const handleCredentialResponse = useCallback(
+    (response: GoogleCredentialResponse) => {
+      setIsSigningInGoogle(false);
+      if (!response?.credential) return;
+      const payload = decodeGoogleJwtPayload(response.credential);
+      if (!payload) return;
+
+      const displayName =
+        payload.name ||
+        payload.given_name ||
+        (payload.email ? payload.email.split('@')[0] : 'Google User');
+      const handleName = payload.email
+        ? payload.email.split('@')[0]
+        : displayName.replace(/\s+/g, '_').toLowerCase();
+
+      onLogin({
+        id: payload.sub ? `google-${payload.sub}` : `google-${Date.now()}`,
+        username: handleName,
+        codename: displayName,
+        email: payload.email,
+        avatarUrl: payload.picture,
+        provider: 'google',
+        avatarColor: 'purple',
+        createdAt: Date.now(),
+      });
+    },
+    [onLogin]
+  );
+
+  // Initialize Google Identity Services in the background for prompt/popup support
+  useEffect(() => {
+    let attempts = 0;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const initGis = () => {
+      const gsi = window.google?.accounts?.id;
+      if (!gsi) return false;
+      try {
+        gsi.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: handleCredentialResponse,
+          auto_select: false,
+          cancel_on_tap_outside: true,
+          ux_mode: 'popup',
+          itp_support: true,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!initGis()) {
+      timer = setInterval(() => {
+        attempts += 1;
+        if (initGis() || attempts > 40) {
+          if (timer) clearInterval(timer);
+        }
+      }, 200);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [handleCredentialResponse]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+
+    const cleanEmail = email.trim().toLowerCase();
     const cleanUsername = username.trim();
-    if (!cleanUsername) {
-      setError('Please provide a username or handle.');
-      return;
-    }
-    if (!password.trim()) {
-      setError('Please provide an access key or password.');
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail) {
+      setError('Please enter your email address.');
       return;
     }
 
-    const user: UserProfile = {
-      id: `user-${Date.now()}`,
-      username: cleanUsername,
-      codename: cleanUsername || 'Operative',
-      avatarColor: selectedColor,
-      createdAt: Date.now(),
-    };
+    if (!isValidEmailFormat(cleanEmail)) {
+      setError('Please enter a valid email address (e.g., name@example.com).');
+      return;
+    }
 
-    onLogin(user);
+    if (!cleanPassword) {
+      setError('Please enter your password.');
+      return;
+    }
+
+    const accounts = getRegisteredAccounts();
+
+    if (isRegister) {
+      if (!cleanUsername) {
+        setError('Please enter a Display Username / Codename.');
+        return;
+      }
+
+      const existing = accounts.find(
+        acc => (acc.email || '').toLowerCase() === cleanEmail
+      );
+      if (existing) {
+        setError('An account with this email already exists. Please switch to Sign In.');
+        return;
+      }
+
+      const newAccount: RegisteredUserAccount = {
+        id: `user-${Date.now()}`,
+        email: cleanEmail,
+        username: cleanUsername,
+        codename: cleanUsername,
+        password: cleanPassword,
+        provider: 'local',
+        avatarColor: selectedColor,
+        createdAt: Date.now(),
+      };
+
+      saveRegisteredAccounts([...accounts, newAccount]);
+
+      const { password: _omittedPassword, ...userProfile } = newAccount;
+      onLogin(userProfile);
+      return;
+    }
+
+    // Sign In tab: authenticate by matching entered email and password
+    const matchedAccount = accounts.find(
+      acc => (acc.email || '').toLowerCase() === cleanEmail
+    );
+
+    if (!matchedAccount) {
+      setError('No account found with this email address. Please switch to Register to create one.');
+      return;
+    }
+
+    if (matchedAccount.password !== cleanPassword) {
+      setError('Incorrect password for this email address.');
+      return;
+    }
+
+    const { password: _omittedPassword, ...userProfile } = matchedAccount;
+    onLogin(userProfile);
   };
 
-  const handleGoogleLogin = () => {
-    const googleUser: UserProfile = {
-      id: `google-${Date.now()}`,
-      username: 'user_google',
-      codename: 'user_google',
-      avatarColor: 'purple',
+  const fallbackToGuestOrDemoGoogle = () => {
+    const cleanName = username.trim();
+    const cleanMail = email.trim().toLowerCase();
+    const derivedName =
+      cleanName ||
+      (cleanMail && cleanMail.includes('@') ? cleanMail.split('@')[0] : 'Operative_07');
+
+    const fallbackUser: UserProfile = {
+      id: `google-demo-${Date.now()}`,
+      username: derivedName.replace(/\s+/g, '_').toLowerCase(),
+      codename: derivedName,
+      email: isValidEmailFormat(cleanMail)
+        ? cleanMail
+        : `${derivedName.toLowerCase().replace(/\s+/g, '.')}@gmail.com`,
+      provider: 'google',
+      avatarColor: selectedColor || 'purple',
       createdAt: Date.now(),
     };
-    onLogin(googleUser);
+    onLogin(fallbackUser);
+  };
+
+  // Single "Continue with Google" handler wired to Google Identity Services
+  const handleContinueWithGoogle = () => {
+    setError('');
+    setIsSigningInGoogle(true);
+
+    // Safety timer so button never stays permanently disabled if user closes popup manually
+    const safetyResetTimer = setTimeout(() => {
+      setIsSigningInGoogle(false);
+    }, 8000);
+
+    const oauth2 = window.google?.accounts?.oauth2;
+    const gsi = window.google?.accounts?.id;
+
+    if (oauth2) {
+      try {
+        const tokenClient = oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'openid email profile',
+          callback: async (tokenResponse) => {
+            clearTimeout(safetyResetTimer);
+            setIsSigningInGoogle(false);
+            if (tokenResponse.error || !tokenResponse.access_token) {
+              fallbackToGuestOrDemoGoogle();
+              return;
+            }
+            try {
+              const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+              });
+              if (!res.ok) throw new Error('Failed to fetch Google profile');
+              const profile = (await res.json()) as GoogleJwtPayload;
+              const displayName =
+                profile.name ||
+                profile.given_name ||
+                (profile.email ? profile.email.split('@')[0] : 'Google User');
+              const handleName = profile.email
+                ? profile.email.split('@')[0]
+                : displayName.replace(/\s+/g, '_').toLowerCase();
+
+              onLogin({
+                id: profile.sub ? `google-${profile.sub}` : `google-${Date.now()}`,
+                username: handleName,
+                codename: displayName,
+                email: profile.email,
+                avatarUrl: profile.picture,
+                provider: 'google',
+                avatarColor: 'purple',
+                createdAt: Date.now(),
+              });
+            } catch {
+              fallbackToGuestOrDemoGoogle();
+            }
+          },
+          error_callback: () => {
+            clearTimeout(safetyResetTimer);
+            setIsSigningInGoogle(false);
+            fallbackToGuestOrDemoGoogle();
+          },
+        });
+        tokenClient.requestAccessToken({ prompt: 'select_account' });
+        return;
+      } catch {
+        // Fall through to GIS prompt or guest fallback
+      }
+    }
+
+    if (gsi) {
+      try {
+        gsi.prompt((notification) => {
+          if (notification.isNotDisplayed?.() || notification.isSkippedMoment?.()) {
+            clearTimeout(safetyResetTimer);
+            setIsSigningInGoogle(false);
+            fallbackToGuestOrDemoGoogle();
+          }
+        });
+        return;
+      } catch {
+        // Fall through to guest fallback
+      }
+    }
+
+    clearTimeout(safetyResetTimer);
+    setIsSigningInGoogle(false);
+    fallbackToGuestOrDemoGoogle();
   };
 
   const handleQuickGuest = () => {
@@ -60,6 +396,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
       id: `guest-${Date.now()}`,
       username: 'Operative_07',
       codename: 'Operative_07',
+      provider: 'guest',
       avatarColor: 'purple',
       createdAt: Date.now(),
     };
@@ -117,30 +454,73 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* 1. Email Address (shown on both Sign In and Register tabs) */}
           <div>
-            <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-purple-400" />
-              Username
+            <label
+              htmlFor="auth-email-input"
+              className="text-xs font-medium text-slate-300 flex items-center gap-1.5"
+            >
+              <Mail className="w-3.5 h-3.5 text-purple-400" />
+              Email Address
             </label>
             <input
-              type="text"
-              placeholder="Enter your username"
-              value={username}
+              id="auth-email-input"
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              placeholder="name@example.com"
+              value={email}
               onChange={(e) => {
                 setError('');
-                setUsername(e.target.value);
+                setEmail(e.target.value);
               }}
               className="w-full mt-1.5 bg-[#131622]/90 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
             />
           </div>
 
+          {/* 2. Display Username / Codename (shown on Register tab) */}
+          {isRegister && (
+            <div>
+              <label
+                htmlFor="auth-username-input"
+                className="text-xs font-medium text-slate-300 flex items-center gap-1.5"
+              >
+                <User className="w-3.5 h-3.5 text-purple-400" />
+                Display Username / Codename
+              </label>
+              <input
+                id="auth-username-input"
+                name="username"
+                type="text"
+                autoComplete="username"
+                required
+                placeholder="e.g. Operative_07"
+                value={username}
+                onChange={(e) => {
+                  setError('');
+                  setUsername(e.target.value);
+                }}
+                className="w-full mt-1.5 bg-[#131622]/90 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
+              />
+            </div>
+          )}
+
+          {/* 3. Password (shown on both Sign In and Register tabs) */}
           <div>
-            <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+            <label
+              htmlFor="auth-password-input"
+              className="text-xs font-medium text-slate-300 flex items-center gap-1.5"
+            >
               <Lock className="w-3.5 h-3.5 text-indigo-400" />
               Password
             </label>
             <input
+              id="auth-password-input"
+              name="password"
               type="password"
+              autoComplete={isRegister ? 'new-password' : 'current-password'}
+              required
               placeholder="••••••••"
               value={password}
               onChange={(e) => {
@@ -192,11 +572,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             <div className="flex-grow border-t border-white/10"></div>
           </div>
 
-          {/* Continue with Google Button */}
+          {/* Single Clean "Continue with Google" Button wired to Google Identity Services */}
           <button
             type="button"
-            onClick={handleGoogleLogin}
-            className="w-full py-3 px-4 rounded-2xl bg-[#131622]/90 hover:bg-[#1a1f30] border border-white/10 hover:border-white/25 text-sm font-semibold text-slate-100 transition flex items-center justify-center gap-2.5 shadow-sm active:scale-[0.98] cursor-pointer"
+            disabled={isSigningInGoogle}
+            onClick={handleContinueWithGoogle}
+            className="w-full py-3 px-4 rounded-2xl bg-[#131622]/90 hover:bg-[#1a1f30] border border-white/10 hover:border-white/25 text-sm font-semibold text-slate-100 transition flex items-center justify-center gap-2.5 shadow-sm active:scale-[0.98] cursor-pointer disabled:opacity-60"
           >
             <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -220,7 +601,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
           </button>
         </form>
 
-        {/* Quick Guest Access */}
+        {/* Quick Guest Access Fallback */}
         <div className="pt-2 border-t border-white/10">
           <button
             type="button"

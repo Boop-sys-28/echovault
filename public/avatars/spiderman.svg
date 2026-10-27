@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg-spidey" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="50%" stop-color="#7f1d1d"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+    <linearGradient id="mask-spidey" x1="64" y1="36" x2="192" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#b91c1c"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg-spidey)"/>
+  <!-- Background Web Lines -->
+  <circle cx="128" cy="128" r="110" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
+  <circle cx="128" cy="128" r="75" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
+  <!-- Shoulders -->
+  <path d="M36 256 Q62 184 128 184 Q194 184 220 256 Z" fill="#dc2626" stroke="#1e3a8a" stroke-width="3"/>
+  <path d="M36 256 L72 204 L98 256 Z" fill="#1d4ed8"/>
+  <path d="M220 256 L184 204 L158 256 Z" fill="#1d4ed8"/>
+  <!-- Spider-Man Mask Head -->
+  <path d="M76 96 C76 48 180 48 180 96 C180 144 156 178 128 182 C100 178 76 144 76 96 Z" fill="url(#mask-spidey)" stroke="#111827" stroke-width="3"/>
+  <!-- Mask Webbing -->
+  <line x1="128" y1="48" x2="128" y2="182" stroke="#111827" stroke-width="1.8" opacity="0.65"/>
+  <line x1="78" y1="115" x2="178" y2="115" stroke="#111827" stroke-width="1.8" opacity="0.65"/>
+  <line x1="86" y1="68" x2="170" y2="162" stroke="#111827" stroke-width="1.8" opacity="0.65"/>
+  <line x1="170" y1="68" x2="86" y2="162" stroke="#111827" stroke-width="1.8" opacity="0.65"/>
+  <ellipse cx="128" cy="115" rx="26" ry="38" stroke="#111827" stroke-width="1.8" opacity="0.6" fill="none"/>
+  <!-- Iconic Expressive White Lenses -->
+  <path d="M85 95 Q102 82 121 108 Q104 126 85 95 Z" fill="#f8fafc" stroke="#090a0f" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M171 95 Q154 82 135 108 Q152 126 171 95 Z" fill="#f8fafc" stroke="#090a0f" stroke-width="6" stroke-linejoin="round"/>
+</svg>

@@ -13,8 +13,16 @@ export interface UserProfile {
   id: string;
   username: string;
   codename: string;
+  email?: string;
+  avatarUrl?: string;
+  provider?: 'local' | 'google' | 'guest';
   avatarColor: string;
   createdAt: number;
+}
+
+export interface RegisteredUserAccount extends UserProfile {
+  email: string;
+  password: string;
 }
 
 export interface CharacterMemory {

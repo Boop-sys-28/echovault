@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg-megumi" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0b132b"/>
+      <stop offset="50%" stop-color="#1c2541"/>
+      <stop offset="100%" stop-color="#090a14"/>
+    </linearGradient>
+    <radialGradient id="glow-megumi" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0b132b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg-megumi)"/>
+  <circle cx="128" cy="110" r="105" fill="url(#glow-megumi)"/>
+  <!-- Ten Shadows Aura Silhouette -->
+  <path d="M40 220 Q65 140 95 160 Q128 110 161 160 Q191 140 216 220 Z" fill="#0f172a" opacity="0.7"/>
+  <!-- Jujutsu High Collar & Uniform -->
+  <path d="M52 256 L72 178 L184 178 L204 256 Z" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <path d="M84 196 L84 148 L172 148 L172 196 Z" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <circle cx="154" cy="172" r="5" fill="#fbbf24"/>
+  <!-- Neck & Face -->
+  <rect x="112" y="132" width="32" height="28" fill="#f1d2be"/>
+  <path d="M88 86 Q88 148 128 154 Q168 148 168 86 Z" fill="#f6dccb"/>
+  <!-- Sharp Stoic Eyes (Teal/Emerald) -->
+  <path d="M98 104 L118 107 L115 113 L100 111 Z" fill="#0f172a"/>
+  <circle cx="109" cy="109" r="3.2" fill="#2dd4bf"/>
+  <path d="M158 104 L138 107 L141 113 L156 111 Z" fill="#0f172a"/>
+  <circle cx="147" cy="109" r="3.2" fill="#2dd4bf"/>
+  <!-- Furrowed Brows -->
+  <path d="M95 99 L119 103" stroke="#0f172a" stroke-width="3" stroke-linecap="round"/>
+  <path d="M161 99 L137 103" stroke="#0f172a" stroke-width="3" stroke-linecap="round"/>
+  <!-- Nose & Stoic Expression -->
+  <path d="M128 112 L126 124 L130 125" stroke="#c89d84" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M118 136 L138 135" stroke="#8c5e47" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- Iconic Spiky Sea-Urchin Dark Navy Hair -->
+  <path d="M128 22 L145 52 L182 32 L166 68 L208 62 L176 92 L202 112 L168 108 L158 82 L144 102 L134 76 L128 104 L118 76 L108 100 L96 80 L88 108 L54 112 L80 92 L48 62 L90 68 L74 32 L111 52 Z" fill="#0a0f1d" stroke="#1e293b" stroke-width="1.5"/>
+</svg>

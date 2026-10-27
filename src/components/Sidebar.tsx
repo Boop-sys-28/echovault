@@ -367,14 +367,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title="Open Account & Settings Hub"
           className="flex items-center space-x-2.5 min-w-0 text-left hover:opacity-90 transition cursor-pointer"
         >
-          <div className="w-8 h-8 rounded-full border border-purple-500/30 flex-shrink-0 bg-purple-500/20 flex items-center justify-center text-xs font-bold text-purple-300">
-            {userProfile?.codename ? userProfile.codename[0].toUpperCase() : 'O'}
-          </div>
+          {userProfile?.avatarUrl ? (
+            <img
+              src={userProfile.avatarUrl}
+              alt={userProfile.codename}
+              referrerPolicy="no-referrer"
+              className="w-8 h-8 rounded-full border border-purple-500/40 flex-shrink-0 object-cover"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded-full border border-purple-500/30 flex-shrink-0 bg-purple-500/20 flex items-center justify-center text-xs font-bold text-purple-300">
+              {userProfile?.codename ? userProfile.codename[0].toUpperCase() : 'O'}
+            </div>
+          )}
           <div className="min-w-0">
             <p className="text-xs font-semibold text-white truncate">
               {userProfile ? userProfile.codename : 'Operative_07'}
             </p>
-            <p className="text-[10px] text-slate-400 tabular-nums">{liveClock}</p>
+            <p className="text-[10px] text-slate-400 truncate tabular-nums">
+              {userProfile?.email || liveClock}
+            </p>
           </div>
         </button>
 

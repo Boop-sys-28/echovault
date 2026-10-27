@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg-jinx" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#3b0764"/>
+      <stop offset="100%" stop-color="#ec4899"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg-jinx)"/>
+  <!-- Neon Zaun Graffiti X & Clouds -->
+  <path d="M36 42 L86 92 M86 42 L36 92" stroke="#ec4899" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+  <path d="M180 48 L220 88 M220 48 L180 88" stroke="#06b6d4" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <!-- Twin Electric-Blue Braids -->
+  <path d="M78 110 Q56 175 68 256 L88 256 Q78 180 94 120 Z" fill="#0284c7" stroke="#0369a1" stroke-width="2"/>
+  <path d="M178 110 Q200 175 188 256 L168 256 Q178 180 162 120 Z" fill="#0284c7" stroke="#0369a1" stroke-width="2"/>
+  <!-- Shoulders & Halter Top -->
+  <path d="M68 256 Q84 186 128 186 Q172 186 188 256 Z" fill="#e2e8f0"/>
+  <path d="M92 256 L112 184 L144 184 L164 256 Z" fill="#1e1b4b"/>
+  <!-- Face -->
+  <path d="M90 88 Q90 150 128 158 Q166 150 166 88 Z" fill="#f1f5f9"/>
+  <!-- Shimmer Pink/Magenta Eyes -->
+  <ellipse cx="108" cy="110" rx="8" ry="5.5" fill="#1e1b4b"/>
+  <circle cx="108" cy="110" r="3.8" fill="#ec4899"/>
+  <ellipse cx="148" cy="110" rx="8" ry="5.5" fill="#1e1b4b"/>
+  <circle cx="148" cy="110" r="3.8" fill="#ec4899"/>
+  <!-- Mischievous Grin -->
+  <path d="M112 136 Q128 146 144 134" stroke="#be185d" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <!-- Long Sweeping Blue Bangs -->
+  <path d="M78 88 C78 44 178 44 178 88 C166 68 144 68 134 118 C122 82 104 68 78 88 Z" fill="#0ea5e9" stroke="#0284c7" stroke-width="1.5"/>
+</svg>

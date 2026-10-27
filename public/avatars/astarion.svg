@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg-astarion" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2e1065"/>
+      <stop offset="50%" stop-color="#4c0519"/>
+      <stop offset="100%" stop-color="#090a0f"/>
+    </linearGradient>
+    <radialGradient id="glow-astarion" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#090a0f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg-astarion)"/>
+  <circle cx="128" cy="110" r="105" fill="url(#glow-astarion)"/>
+  <!-- Aristocratic Ruffled Collar & Crimson Doublet -->
+  <path d="M44 256 L72 180 L184 180 L212 256 Z" fill="#4c0519" stroke="#fbbf24" stroke-width="2"/>
+  <path d="M98 180 L128 228 L158 180 Z" fill="#f8fafc" opacity="0.9"/>
+  <!-- Pointed High Elf Ears -->
+  <path d="M86 104 L62 90 L76 122 Z" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1.5"/>
+  <path d="M170 104 L194 90 L180 122 Z" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1.5"/>
+  <!-- Pale Vampire Face -->
+  <rect x="112" y="140" width="32" height="30" fill="#e2e8f0"/>
+  <path d="M86 84 Q86 150 128 158 Q170 150 170 84 Z" fill="#f1f5f9"/>
+  <!-- Crimson Vampire Eyes -->
+  <path d="M98 104 L118 106 L115 112 L100 110 Z" fill="#1e293b"/>
+  <circle cx="108" cy="108" r="3.5" fill="#e11d48"/>
+  <path d="M158 104 L138 106 L141 112 L156 110 Z" fill="#1e293b"/>
+  <circle cx="148" cy="108" r="3.5" fill="#e11d48"/>
+  <!-- Arched Aristocratic Brows & Smirk with Fang -->
+  <path d="M96 96 Q108 92 118 98" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <path d="M160 94 Q148 89 138 97" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <path d="M114 138 Q128 143 142 134" stroke="#881337" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <polygon points="136,137 139,144 141,136" fill="#ffffff"/>
+  <!-- Swept-Back Wavy Silver Curls -->
+  <path d="M74 96 C64 52 96 28 128 32 C164 26 194 52 182 96 C176 74 156 64 138 72 C122 58 94 66 74 96 Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <path d="M84 58 Q112 42 142 56 M104 44 Q136 34 166 52" stroke="#cbd5e1" stroke-width="2" fill="none"/>
+</svg>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="bg-2b" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="50%" stop-color="#27272a"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </linearGradient>
+    <radialGradient id="glow-2b" cx="50%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#e4e4e7" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#09090b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg-2b)"/>
+  <circle cx="128" cy="115" r="105" fill="url(#glow-2b)"/>
+  <!-- YoRHa Gothic High Collar & Shoulders -->
+  <path d="M48 256 L74 182 L182 182 L208 256 Z" fill="#09090b" stroke="#52525b" stroke-width="2"/>
+  <path d="M96 190 L110 156 L146 156 L160 190 Z" fill="#18181b" stroke="#71717a" stroke-width="1.5"/>
+  <!-- Silver Hair Back Bob -->
+  <path d="M68 92 C64 40 192 40 188 92 C192 140 176 168 164 174 L92 174 C80 168 64 140 68 92 Z" fill="#e4e4e7"/>
+  <!-- Face -->
+  <path d="M88 88 Q88 152 128 158 Q168 152 168 88 Z" fill="#fdf2f8"/>
+  <!-- Black Headband -->
+  <path d="M74 68 Q128 48 182 68 L178 78 Q128 58 78 78 Z" fill="#09090b"/>
+  <!-- Iconic YoRHa Combat Visor / Blindfold -->
+  <path d="M82 94 Q128 104 174 94 L170 120 Q128 128 86 120 Z" fill="#09090b" stroke="#3f3f46" stroke-width="1.5"/>
+  <path d="M90 102 L166 108" stroke="#52525b" stroke-width="1" opacity="0.6"/>
+  <!-- Silver Bangs Sweeping Over Visor -->
+  <path d="M76 68 Q96 106 116 116 L112 76 L138 114 L144 74 L168 112 Q182 88 180 68 Q128 46 76 68 Z" fill="#f4f4f5" stroke="#d4d4d8" stroke-width="1"/>
+  <!-- Beauty Mark & Lips -->
+  <circle cx="147" cy="140" r="1.8" fill="#27272a"/>
+  <path d="M119 141 Q128 144 137 141" stroke="#be185d" stroke-width="2.2" stroke-linecap="round"/>
+</svg>
