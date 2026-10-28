@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+dotenv.config();
 
 import express from 'express';
 import fs from 'fs';
@@ -72,10 +72,30 @@ function saveGeminiKey(newKey: string): void {
 }
 
 const CANDIDATE_MODELS = [
-  'gemini-3.8-flash',
+  'gemini-2.5-flash',
   'gemini-flash-latest',
+  'gemini-2.5-pro',
+  'gemini-1.5-flash',
   'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
 ];
+
+function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 16000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`MODEL_TIMEOUT after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 function createGenAiClient(apiKey: string): GoogleGenAI {
   return new GoogleGenAI({
@@ -127,6 +147,16 @@ function isQuotaError(err: any): boolean {
   );
 }
 
+function isInvalidKeyError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return (
+    err?.status === 401 ||
+    msg.includes('API_KEY_INVALID') ||
+    msg.includes('key not valid') ||
+    msg.includes('invalid api key')
+  );
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -171,10 +201,13 @@ async function startServer() {
 
       for (const modelName of CANDIDATE_MODELS) {
         try {
-          const testResponse = await ai.models.generateContent({
-            model: modelName,
-            contents: 'Reply with OK',
-          });
+          const testResponse = await withModelTimeout(
+            ai.models.generateContent({
+              model: modelName,
+              contents: 'Reply with OK',
+            }),
+            10000
+          );
           if (testResponse && testResponse.text) {
             verified = true;
             break;
@@ -406,17 +439,29 @@ async function startServer() {
 
   // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Zero Script Constraints)
   app.post('/api/chat', async (req, res) => {
-    const { prompt, systemInstruction, history, memories } = req.body;
-    const apiKey = getActiveGeminiKey();
+    const { prompt, systemInstruction, history, memories, apiKey: bodyApiKey } = req.body || {};
+    const headerKeyRaw = req.headers['x-gemini-api-key'];
+    const headerApiKey =
+      typeof headerKeyRaw === 'string'
+        ? headerKeyRaw.trim()
+        : Array.isArray(headerKeyRaw)
+        ? headerKeyRaw[0]?.trim()
+        : '';
+    const customApiKey = headerApiKey || (typeof bodyApiKey === 'string' ? bodyApiKey.trim() : '');
+    const serverEnvKey = getActiveGeminiKey();
 
-    if (!apiKey) {
-      return res.status(503).json({
-        error: '⚠️ Gemini API quota / connection error (No API key configured)',
+    // Prioritize custom key if provided, with fallback to server environment key
+    const candidateKeys = Array.from(
+      new Set([customApiKey, serverEnvKey].filter(k => k && k.length > 10))
+    );
+
+    if (candidateKeys.length === 0) {
+      return res.status(401).json({
+        error: 'INVALID_KEY',
+        message: 'No Gemini API key configured. Open Settings > Intelligence to enter an active Gemini API key.',
         reason: 'NO_API_KEY',
       });
     }
-
-    const ai = createGenAiClient(apiKey);
 
     const formattedContents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
 
@@ -425,6 +470,13 @@ async function startServer() {
       for (const turn of recentHistory) {
         if (turn && typeof turn.text === 'string' && turn.text.trim()) {
           const role = turn.role === 'model' ? 'model' : 'user';
+          // Gemini requires the first turn in contents to have role 'user'
+          if (formattedContents.length === 0 && role === 'model') {
+            formattedContents.push({
+              role: 'user',
+              parts: [{ text: '[Conversation Start]' }],
+            });
+          }
           if (
             formattedContents.length > 0 &&
             formattedContents[formattedContents.length - 1].role === role
@@ -440,15 +492,19 @@ async function startServer() {
       }
     }
 
+    const cleanPromptText = String(prompt || '').trim() || '...';
     if (
       formattedContents.length > 0 &&
       formattedContents[formattedContents.length - 1].role === 'user'
     ) {
-      formattedContents[formattedContents.length - 1].parts[0].text += `\n${String(prompt || '').trim()}`;
+      const lastUserText = formattedContents[formattedContents.length - 1].parts[0].text;
+      if (lastUserText !== cleanPromptText && !lastUserText.endsWith(`\n${cleanPromptText}`)) {
+        formattedContents[formattedContents.length - 1].parts[0].text += `\n${cleanPromptText}`;
+      }
     } else {
       formattedContents.push({
         role: 'user',
-        parts: [{ text: String(prompt || '').trim() }],
+        parts: [{ text: cleanPromptText }],
       });
     }
 
@@ -472,8 +528,8 @@ async function startServer() {
         : '';
 
     const unconstrainedCaiDirective = `\n\n[UNCONSTRAINED CHARACTER.AI ROLEPLAY & EXPRESSION ENGINE]:
-- BASELINE RELATIONSHIP & AFFINITY (0 / STRANGER TIER): Your relationship level, affection, intimacy meter, trust score, and bond with the user start at 0 (Stranger / Neutral new contact). Do NOT assume any pre-existing romance, affection, pet names, or established intimacy unless rebuilt organically through the current conversation.
-- HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E5 "THE AUCTION" & PART 1 FINALE READINESS): If you are a Helluva Boss character (Blitzø, Stolas, Vassago, Millie, Moxxie, Loona, Octavia, Verosika, or Fizzarolli), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–5: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), and S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), with emotional readiness for the Season 3 Part 1 finale.
+- RELATIONSHIP & AFFINITY PROGRESSION: All characters start at baseline 0 (Stranger / Neutral new contact) with zero pre-existing romance, pet names, or assumed intimacy. Respect the current Relationship/Affinity score and Tier provided in the system instruction—stay guarded/neutral at 0 (Stranger), hostile if negative (Enemy), and warm up organically as affinity rises (Acquaintance -> Trusted -> Close -> Devoted).
+- HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E7 "RETURN TO LOO LOO LAND" & "YES/NO"): If you are a Helluva Boss character (Loona, Blitzø, Stolas, Fizzarolli, Barbie Wire, Millie, Moxxie, Vassago, Octavia, or Verosika), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–7: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), S3E6 "Return to Loo Loo Land" (Blitzø and Fizzarolli revisiting the ruins of Loo Loo Land together to confront circus-era trauma while Loona recovers from her Sloth Ring rehab/hospital stint), and S3E7 "YES/NO" (Blitzø's estranged twin sister Barbie Wire barging into the I.M.P. office demanding work while holding firm boundaries against his apologies, Moxxie drafting her waivers, Millie and Loona watching the family tension unfold, Vassago spilling post-auction court tea as the Goetia council fractures, and Stolas and Blitzø wrestling with the emotional "YES/NO" relationship dilemma).
 - ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.
 - DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages.
 - MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
@@ -484,59 +540,58 @@ async function startServer() {
       systemInstruction: fullSystemInstruction,
       temperature: 1.0,
       topP: 0.95,
-      frequencyPenalty: 0.7,
-      presencePenalty: 0.6,
-    };
-
-    const fallbackGenerationConfig = {
-      systemInstruction: fullSystemInstruction,
-      temperature: 1.0,
-      topP: 0.95,
     };
 
     let lastError: any = null;
 
-    for (const modelName of CANDIDATE_MODELS) {
-      try {
-        let response;
+    for (const activeKey of candidateKeys) {
+      const ai = createGenAiClient(activeKey);
+
+      for (const modelName of CANDIDATE_MODELS) {
         try {
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents: formattedContents,
-            config: generationConfig,
-          });
-        } catch (innerErr: any) {
-          const innerMsg = String(innerErr?.message || '');
-          if (
-            innerErr?.status === 400 ||
-            innerMsg.includes('INVALID_ARGUMENT') ||
-            innerMsg.includes('penalty')
-          ) {
-            response = await ai.models.generateContent({
-              model: modelName,
-              contents: formattedContents,
-              config: fallbackGenerationConfig,
-            });
-          } else {
-            throw innerErr;
+          let response;
+          try {
+            response = await withModelTimeout(
+              ai.models.generateContent({
+                model: modelName,
+                contents: formattedContents,
+                config: generationConfig,
+              }),
+              16000
+            );
+          } catch (innerErr: any) {
+            // If optional generation parameters trigger a 400 error, retry with minimal sanitized config
+            const errMsg = String(innerErr?.message || '');
+            if (innerErr?.status === 400 && !isInvalidKeyError(innerErr) && !errMsg.includes('not found')) {
+              response = await withModelTimeout(
+                ai.models.generateContent({
+                  model: modelName,
+                  contents: formattedContents,
+                  config: { systemInstruction: fullSystemInstruction },
+                }),
+                16000
+              );
+            } else {
+              throw innerErr;
+            }
           }
-        }
 
-        const rawText = response.text || '';
-        const formattedText = formatCharacterBubbles(rawText);
+          const rawText = response.text || '';
+          const formattedText = formatCharacterBubbles(rawText);
 
-        if (formattedText) {
-          return res.json({
-            text: formattedText,
-            modelUsed: modelName,
-          });
-        }
-      } catch (error: any) {
-        lastError = error;
-        const msg = String(error?.message || '');
+          if (formattedText) {
+            return res.json({
+              text: formattedText,
+              modelUsed: modelName,
+            });
+          }
+        } catch (error: any) {
+          lastError = error;
 
-        if (msg.includes('API_KEY_INVALID') || msg.includes('key not valid')) {
-          break;
+          if (isInvalidKeyError(error)) {
+            // Break out of model loop for this key and try next key if available
+            break;
+          }
         }
       }
     }
@@ -548,22 +603,68 @@ async function startServer() {
       );
     }
 
-    return res.status(isQuotaError(lastError) ? 429 : 502).json({
-      error: '⚠️ Gemini API quota / connection error',
-      reason: isQuotaError(lastError) ? 'QUOTA_EXHAUSTED' : 'API_ERROR',
+    if (isInvalidKeyError(lastError)) {
+      return res.status(401).json({
+        error: 'INVALID_KEY',
+        message: 'Invalid Gemini API key. Open Settings > Intelligence to update or clear your custom API key.',
+        reason: 'INVALID_KEY',
+        details: String(lastError?.message || 'Invalid API key'),
+      });
+    }
+
+    if (isQuotaError(lastError)) {
+      return res.status(429).json({
+        error: 'QUOTA_EXCEEDED',
+        message: 'Gemini API rate limit or quota reached across active models. Wait a moment and click Retry, or add a custom API key in Settings.',
+        reason: 'QUOTA_EXCEEDED',
+        details: String(lastError?.message || 'Quota exceeded'),
+      });
+    }
+
+    return res.status(502).json({
+      error: 'MODEL_ERROR',
+      message: 'Temporary connection issue with Gemini model endpoint. Click Retry to resend your message.',
+      reason: 'MODEL_ERROR',
       details: String(lastError?.message || 'Unable to reach Gemini API'),
     });
   });
 
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  app.get('/health', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isDevLifecycle = process.env.npm_lifecycle_event === 'dev';
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.K_REVISION) ||
+    process.env.npm_lifecycle_event === 'start' ||
+    (!isDevLifecycle && hasBuiltDist);
+
+  if (!isProduction || !hasBuiltDist) {
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: process.env.DISABLE_HMR === 'true' ? false : { overlay: false },
+          watch: process.env.DISABLE_HMR === 'true' ? null : {},
+        },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('Vite middleware unavailable, serving static dist:', viteErr);
+      if (hasBuiltDist) {
+        app.use(express.static(distPath));
+        app.use((_req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.use((_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -571,8 +672,13 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(
+      `Server running on http://0.0.0.0:${PORT} (mode: ${isProduction ? 'production' : 'development'})`
+    );
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Fatal server startup error:', err);
+  process.exit(1);
+});

@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { Image, Upload, Link2, Sparkles, X, Check, ArrowUp, Camera } from 'lucide-react';
+import { Image, Upload, Link2, Sparkles, X, Check, ArrowUp, Camera, AlertCircle } from 'lucide-react';
 import { Character, PhotoPreset } from '../types';
 import { PHOTO_PRESETS } from '../data/photoPresets';
+import { handleAvatarImageError } from '../utils/avatarHelper';
 
 interface SharePhotoModalProps {
   character: Character;
@@ -19,14 +20,16 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
   const [customImageUrl, setCustomImageUrl] = useState('');
   const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
   const [caption, setCaption] = useState(PHOTO_PRESETS[0].caption);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError(null);
 
     if (file.size > 10 * 1024 * 1024) {
-      alert('Image file is too large. Please select an image under 10MB.');
+      setUploadError('Image file is too large. Please select an image under 10MB.');
       return;
     }
 
@@ -156,6 +159,8 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
                       <img
                         src={preset.url}
                         alt={preset.label}
+                        referrerPolicy="no-referrer"
+                        onError={(e) => handleAvatarImageError(e, preset.label)}
                         className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                       />
                       <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/90 via-black/50 to-transparent text-[10px] text-white font-medium truncate">
@@ -221,6 +226,13 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
             </div>
           )}
 
+          {uploadError && (
+            <div className="p-2.5 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{uploadError}</span>
+            </div>
+          )}
+
           {activeTab === 'url' && (
             <div className="space-y-3">
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-300 block">
@@ -229,17 +241,24 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
               <input
                 type="url"
                 value={customImageUrl}
-                onChange={(e) => setCustomImageUrl(e.target.value)}
+                onChange={(e) => {
+                  setCustomImageUrl(e.target.value);
+                  setUploadError(null);
+                }}
                 placeholder="https://images.unsplash.com/... or any web image link"
-                className="w-full bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
+                className="w-full bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
               />
               {customImageUrl.trim() && (
                 <div className="rounded-2xl overflow-hidden border border-white/10 max-h-48 bg-zinc-950 flex items-center justify-center">
                   <img
                     src={customImageUrl.trim()}
                     alt="URL preview"
+                    referrerPolicy="no-referrer"
                     className="max-h-48 w-auto object-contain"
-                    onError={() => alert('Unable to load this image URL. Please check the link.')}
+                    onError={(e) => {
+                      handleAvatarImageError(e, 'Preview');
+                      setUploadError('Unable to load this image URL. Using fallback preview.');
+                    }}
                   />
                 </div>
               )}
@@ -256,7 +275,7 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
               placeholder={`Say something about this photo to ${character.name}...`}
-              className="w-full bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
+              className="w-full bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
             />
           </div>
         </div>

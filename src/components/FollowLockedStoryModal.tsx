@@ -35,8 +35,9 @@ export const FollowLockedStoryModal: React.FC<FollowLockedStoryModalProps> = ({
         <div className="relative mt-2">
           <div className="w-20 h-20 rounded-full p-1 border-2 border-dashed border-amber-400/80 shadow-xl shadow-amber-500/10 flex items-center justify-center">
             <img
-              src={resolveAvatarUrl(character.avatar, character.id)}
+              src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
+              referrerPolicy="no-referrer"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-[#131622] bg-[#161a2b] brightness-75"
             />

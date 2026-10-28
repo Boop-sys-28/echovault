@@ -304,27 +304,49 @@ export function parseCaiTranscript(rawText: string, characterName: string): { us
   const userMessages: string[] = [];
   const botMessages: string[] = [];
 
+  const lowerCharFull = characterName.toLowerCase();
+  const lowerCharFirst = characterName.split(/[\s(]/)[0].toLowerCase();
+  const lowerCharNoAccent = lowerCharFirst.replace(/ø/g, 'o');
+
   let currentSpeaker = '';
   let currentBuffer = '';
 
   for (const line of lines) {
-    if (line.toLowerCase().startsWith('user:') || line.toLowerCase().startsWith('you:')) {
-      if (currentSpeaker === 'bot') botMessages.push(currentBuffer.trim());
+    const lowerLine = line.toLowerCase();
+    const isUserPrefix =
+      lowerLine.startsWith('user:') ||
+      lowerLine.startsWith('you:') ||
+      lowerLine.startsWith('me:') ||
+      lowerLine.startsWith('operative_07:') ||
+      lowerLine.startsWith('operative:');
+
+    const isBotPrefix =
+      lowerLine.startsWith(`${lowerCharFull}:`) ||
+      (lowerCharFirst.length >= 2 && lowerLine.startsWith(`${lowerCharFirst}:`)) ||
+      (lowerCharNoAccent.length >= 2 && lowerLine.startsWith(`${lowerCharNoAccent}:`)) ||
+      lowerLine.startsWith('char:') ||
+      lowerLine.startsWith('bot:');
+
+    if (isUserPrefix) {
+      if (currentSpeaker === 'bot' && currentBuffer.trim()) botMessages.push(currentBuffer.trim());
+      if (currentSpeaker === 'user' && currentBuffer.trim()) userMessages.push(currentBuffer.trim());
       currentSpeaker = 'user';
-      currentBuffer = line.replace(/^(user|you):\s*/i, '');
-    } else if (line.toLowerCase().startsWith(`${characterName.toLowerCase()}:`)) {
-      if (currentSpeaker === 'user') userMessages.push(currentBuffer.trim());
+      currentBuffer = line.replace(/^(user|you|me|operative_07|operative):\s*/i, '');
+    } else if (isBotPrefix) {
+      if (currentSpeaker === 'user' && currentBuffer.trim()) userMessages.push(currentBuffer.trim());
+      if (currentSpeaker === 'bot' && currentBuffer.trim()) botMessages.push(currentBuffer.trim());
       currentSpeaker = 'bot';
-      currentBuffer = line.replace(new RegExp(`^${characterName}:\\s*`, 'i'), '');
+      const colonIdx = line.indexOf(':');
+      currentBuffer = colonIdx !== -1 ? line.slice(colonIdx + 1).trim() : line;
     } else {
-      currentBuffer += ` ${line}`;
+      currentBuffer += (currentBuffer ? ' ' : '') + line;
     }
   }
 
-  if (currentSpeaker === 'user') userMessages.push(currentBuffer.trim());
-  if (currentSpeaker === 'bot') botMessages.push(currentBuffer.trim());
+  if (currentSpeaker === 'user' && currentBuffer.trim()) userMessages.push(currentBuffer.trim());
+  if (currentSpeaker === 'bot' && currentBuffer.trim()) botMessages.push(currentBuffer.trim());
 
-  // Fallback if the user pasted raw sentences without "User:" / "You:" prefixes
+  // Fallback if the user pasted raw sentences without speaker prefixes
   if (userMessages.length === 0 && botMessages.length === 0 && lines.length > 0) {
     return { userMessages: lines, botMessages: [] };
   }
@@ -339,28 +361,92 @@ export function computeAffinityDeltaFromTranscript(
   let score = 0;
   const fullText = userMessages.join(' ').toLowerCase();
 
-  // Character-specific sentiment heuristics (e.g., Loona hates clinginess/prying, respects genuine space or treats)
+  const countOccurrences = (word: string): number => {
+    if (!word) return 0;
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = fullText.match(new RegExp(escaped, 'gi'));
+    return matches ? matches.length : 0;
+  };
+
+  // Character-specific sentiment heuristics
   if (characterId === 'loona') {
-    const positiveKeywords = ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill'];
-    const negativeKeywords = ['hug me', 'smile', 'obey', 'annoying'];
+    const positiveKeywords = ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill', 'deftones', 'space', 'respect', 'headphones'];
+    const negativeKeywords = ['hug me', 'smile', 'obey', 'annoying', 'mutt', 'furry', 'shut up'];
 
     positiveKeywords.forEach((w) => {
-      if (fullText.includes(w)) score += 2;
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(8, hits * 3);
     });
     negativeKeywords.forEach((w) => {
-      if (fullText.includes(w)) score -= 3;
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 4);
+    });
+  } else if (characterId === 'blitzo') {
+    const positiveKeywords = ['horse', 'horses', 'badass', 'boss', 'imp', 'backup', 'stolas', 'loona', 'necklace', 'auction', 'guns', 'respect', 'help', 'team'];
+    const negativeKeywords = ['clown', 'failure', 'pathetic', 'verosika', 'die', 'alone', 'useless', 'shut up'];
+
+    positiveKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(9, hits * 3);
+    });
+    negativeKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 4);
+    });
+  } else if (characterId === 'millie') {
+    const positiveKeywords = ['moxxie', 'sweet', 'thanks', 'help', 'wrath', 'fight', 'axe', 'friend', 'team', 'crew', 'appreciate', 'hon'];
+    const negativeKeywords = ['weak', 'idiot', 'useless', 'shut up', 'hate', 'betray'];
+
+    positiveKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(9, hits * 4);
+    });
+    negativeKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 4);
+    });
+  } else if (characterId === 'moxxie') {
+    const positiveKeywords = ['opera', 'musical', 'millie', 'precision', 'tactical', 'protocol', 'professional', 'sir', 'thank', 'agree', 'weapons', 'clean'];
+    const negativeKeywords = ['possum', 'weak', 'idiot', 'crimson', 'useless', 'shut up', 'pathetic'];
+
+    positiveKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(9, hits * 3);
+    });
+    negativeKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 4);
+    });
+  } else if (characterId === 'batman' || characterId === 'nightwing' || characterId === 'redhood') {
+    const positiveKeywords = ['patrol', 'gotham', 'backup', 'intel', 'clear', 'sector', 'trust', 'help', 'team', 'safe', 'coffee', 'report', 'got your back'];
+    const negativeKeywords = ['joker', 'crowbar', 'betray', 'useless', 'idiot', 'weak', 'shut up', 'kill'];
+
+    positiveKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(9, hits * 3);
+    });
+    negativeKeywords.forEach((w) => {
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 4);
     });
   } else {
     // Generic baseline
-    const positiveWords = ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank'];
-    const negativeWords = ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die'];
+    const positiveWords = ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank', 'appreciate', 'listen', 'coffee', 'cool', 'good', 'trust'];
+    const negativeWords = ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die', 'pathetic', 'annoying'];
 
     positiveWords.forEach((w) => {
-      if (fullText.includes(w)) score += 3;
+      const hits = countOccurrences(w);
+      if (hits > 0) score += Math.min(9, hits * 3);
     });
     negativeWords.forEach((w) => {
-      if (fullText.includes(w)) score -= 5;
+      const hits = countOccurrences(w);
+      if (hits > 0) score -= Math.min(12, hits * 5);
     });
+  }
+
+  // Add +2 per substantive conversational turn if overall tone is not hostile
+  if (score >= 0 && userMessages.length > 0) {
+    score += Math.min(16, userMessages.length * 2);
   }
 
   // Cap delta between -35 and +35 per import
@@ -368,7 +454,12 @@ export function computeAffinityDeltaFromTranscript(
 
   return {
     delta: finalDelta,
-    reason: finalDelta >= 0 ? 'Consistent respect and positive rapport.' : 'Boundary pushing, insults, or unearned familiarity.',
+    reason:
+      finalDelta > 0
+        ? 'Consistent respect, natural rapport, and canon-aligned triggers.'
+        : finalDelta < 0
+        ? 'Boundary pushing, insults, or negative character triggers.'
+        : 'Neutral introductory exchange.',
     importedMessageCount: userMessages.length,
   };
 }
@@ -391,39 +482,47 @@ export function evaluateTurnAffinityChange(
   const lower = userMessageText.toLowerCase();
   let posHits = 0;
   let negHits = 0;
-  let delta = 1; // baseline +1 for natural engagement unless negative
+  let delta = 2; // baseline +2 for natural engagement unless negative
 
   const posWords =
     characterId === 'loona'
-      ? ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill', 'deftones', 'cool', 'respect']
-      : ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank', 'backup', 'got your back', 'appreciate', 'cool', 'nice', 'good'];
+      ? ['quiet', 'listen', 'coffee', 'thanks', 'dog', 'treat', 'music', 'chill', 'deftones', 'cool', 'respect', 'headphones']
+      : characterId === 'blitzo'
+      ? ['horse', 'badass', 'boss', 'imp', 'backup', 'stolas', 'necklace', 'auction', 'respect', 'help', 'team', 'cool']
+      : characterId === 'millie'
+      ? ['moxxie', 'sweet', 'thanks', 'help', 'wrath', 'axe', 'friend', 'team', 'crew', 'appreciate']
+      : characterId === 'moxxie'
+      ? ['opera', 'millie', 'tactical', 'protocol', 'professional', 'sir', 'thank', 'agree', 'weapons']
+      : ['respect', 'help', 'friend', 'safe', 'agree', 'team', 'thank', 'backup', 'got your back', 'appreciate', 'cool', 'nice', 'good', 'coffee', 'patrol', 'intel'];
+
   const negWords =
     characterId === 'loona'
       ? ['hug me', 'smile', 'obey', 'annoying', 'shut up', 'idiot', 'useless', 'hate']
-      : ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die', 'pathetic', 'loser'];
+      : ['idiot', 'useless', 'shut up', 'hate', 'betray', 'die', 'pathetic', 'loser', 'annoying'];
 
   posWords.forEach((w) => {
     if (lower.includes(w)) {
       posHits += 1;
-      delta += 3;
+      delta += 4;
     }
   });
 
   negWords.forEach((w) => {
     if (lower.includes(w)) {
       negHits += 1;
-      delta -= 5;
+      delta -= 6;
     }
   });
 
   if (negHits > 0 && posHits === 0) {
-    delta = Math.min(-3, delta);
+    delta = Math.min(-4, delta);
   }
 
   return {
-    delta: Math.max(-15, Math.min(12, delta)),
+    delta: Math.max(-15, Math.min(15, delta)),
     posHits,
     negHits,
   };
 }
+
 

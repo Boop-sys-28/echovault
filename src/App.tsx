@@ -160,50 +160,143 @@ export default function App() {
   const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
 
   // Baseline 0 relationship progression state for all characters
-  const [relationshipLevels, setRelationshipLevels] = useState<Record<string, number>>(() =>
-    clearAndResetStoredRelationshipProgression()
-  );
+  const [relationshipLevels, setRelationshipLevels] = useState<Record<string, number>>(() => {
+    try {
+      const initialized = localStorage.getItem('pulsedirect_baseline_v2_init') === 'true';
+      if (!initialized) {
+        const map = clearAndResetStoredRelationshipProgression();
+        localStorage.setItem('pulsedirect_baseline_v2_init', 'true');
+        return map;
+      }
+      const saved = localStorage.getItem('pulsedirect_relationship_levels');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const merged: Record<string, number> = {};
+        DEFAULT_CHARACTERS.forEach(c => {
+          merged[c.id] = typeof parsed[c.id] === 'number' ? parsed[c.id] : 0;
+        });
+        return merged;
+      }
+    } catch {
+      // fallback
+    }
+    return clearAndResetStoredRelationshipProgression();
+  });
 
   // Detailed relationship score breakdowns per character
-  const [scoreBreakdowns, setScoreBreakdowns] = useState<Record<string, RelationshipScoreBreakdown>>(() =>
-    buildBaselineScoreBreakdowns()
-  );
+  const [scoreBreakdowns, setScoreBreakdowns] = useState<Record<string, RelationshipScoreBreakdown>>(() => {
+    try {
+      const saved = localStorage.getItem('pulsedirect_score_breakdowns');
+      if (saved) {
+        return { ...buildBaselineScoreBreakdowns(), ...JSON.parse(saved) };
+      }
+    } catch {
+      // fallback
+    }
+    return buildBaselineScoreBreakdowns();
+  });
 
   // Dynamic Group Rooms State (starts locked at baseline 0 until a member's affinity threshold is reached)
-  const [groupRooms, setGroupRooms] = useState<DynamicGroupRoom[]>(() =>
-    PRESET_GROUP_ROOMS.map(room => ({ ...room, isUnlocked: false, unlockedBy: undefined }))
-  );
+  const [groupRooms, setGroupRooms] = useState<DynamicGroupRoom[]>(() => {
+    try {
+      const saved = localStorage.getItem('pulsedirect_group_rooms');
+      if (saved) {
+        const parsed: DynamicGroupRoom[] = JSON.parse(saved);
+        return PRESET_GROUP_ROOMS.map(preset => {
+          const match = parsed.find(p => p.id === preset.id);
+          return match
+            ? { ...preset, isUnlocked: Boolean(match.isUnlocked), unlockedBy: match.unlockedBy }
+            : { ...preset, isUnlocked: false, unlockedBy: undefined };
+        });
+      }
+    } catch {
+      // fallback
+    }
+    return PRESET_GROUP_ROOMS.map(room => ({ ...room, isUnlocked: false, unlockedBy: undefined }));
+  });
   const [activeGroupRoomId, setActiveGroupRoomId] = useState<string>('');
   const [groupRoomMessages, setGroupRoomMessages] = useState<Record<string, BacklogMessage[]>>({});
 
-  // Characters list (including custom imported characters from C.AI, all reset to 0 affinity/bond)
+  // Characters list (including custom imported characters from C.AI and persisted operative_user_counts)
   const [characters, setCharacters] = useState<Character[]>(() => {
+    let savedUserCounts: Record<string, number> = {};
     try {
+      const rawCounts = localStorage.getItem('operative_user_counts');
+      if (rawCounts) {
+        savedUserCounts = JSON.parse(rawCounts);
+      }
+    } catch {
+      // ignore
+    }
+
+    const baseWithCounts = DEFAULT_CHARACTERS.map(c => {
+      const count = typeof savedUserCounts[c.id] === 'number' ? savedUserCounts[c.id] : (c.userCount ?? 1200);
+      savedUserCounts[c.id] = count;
+      return {
+        ...c,
+        userCount: count,
+        interactionCount: count,
+      };
+    });
+
+    try {
+      localStorage.setItem('operative_user_counts', JSON.stringify(savedUserCounts));
       const saved = localStorage.getItem('pulsedirect_custom_characters');
       if (saved) {
         const customList: Character[] = JSON.parse(saved);
         const defaultIds = new Set(DEFAULT_CHARACTERS.map(c => c.id));
         const normalizedCustom = customList
           .filter(c => c && !defaultIds.has(c.id))
-          .map(c => ({
-            ...c,
-            avatar: resolveAvatarUrl(c.avatar, c.id),
-            storyImg: c.storyImg ? resolveAvatarUrl(c.storyImg, c.id) : undefined,
-            relationshipLevel: 0,
-            affinity: 0,
-            affection: 0,
-            trustScore: 0,
-            bond: 0,
-            relationshipTier: 'Stranger',
-          }));
+          .map(c => {
+            const count = typeof savedUserCounts[c.id] === 'number' ? savedUserCounts[c.id] : (c.userCount ?? 850);
+            return {
+              ...c,
+              avatar: resolveAvatarUrl(c.avatar, c.id),
+              storyImg: c.storyImg ? resolveAvatarUrl(c.storyImg, c.id) : undefined,
+              relationshipLevel: 0,
+              affinity: 0,
+              affection: 0,
+              trustScore: 0,
+              bond: 0,
+              relationshipTier: 'Stranger',
+              userCount: count,
+              interactionCount: count,
+            };
+          });
         localStorage.setItem('pulsedirect_custom_characters', JSON.stringify(normalizedCustom));
-        return [...DEFAULT_CHARACTERS, ...normalizedCustom];
+        return [...baseWithCounts, ...normalizedCustom];
       }
     } catch {
       // fallback
     }
-    return DEFAULT_CHARACTERS;
+    return baseWithCounts;
   });
+
+  const incrementOperativeUserCount = (charId: string) => {
+    setCharacters(prev => {
+      const next = prev.map(c => {
+        if (c.id !== charId) return c;
+        const updatedCount = (c.userCount ?? 1200) + 1;
+        return {
+          ...c,
+          userCount: updatedCount,
+          interactionCount: updatedCount,
+        };
+      });
+      try {
+        const raw = localStorage.getItem('operative_user_counts');
+        const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+        const target = next.find(c => c.id === charId);
+        if (target) {
+          map[charId] = target.userCount ?? 1201;
+          localStorage.setItem('operative_user_counts', JSON.stringify(map));
+        }
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   // Authentication & Onboarding State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
@@ -301,6 +394,7 @@ export default function App() {
   // AI Connection & Error Banner State
   const [hasServerAi, setHasServerAi] = useState<boolean>(false);
   const [apiErrorBanner, setApiErrorBanner] = useState<string | null>(null);
+  const [lastFailedMessageText, setLastFailedMessageText] = useState<string | null>(null);
 
   // Followed Characters State (starts at 0 / empty so no character has pre-existing bond status)
   const [followedCharIds, setFollowedCharIds] = useState<string[]>([]);
@@ -341,6 +435,18 @@ export default function App() {
     statusText: '',
     subtitle: '',
   });
+  const callTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const clearCallTimers = () => {
+    callTimersRef.current.forEach(t => clearTimeout(t));
+    callTimersRef.current = [];
+  };
+
+  useEffect(() => {
+    return () => {
+      clearCallTimers();
+    };
+  }, []);
 
   /**
    * Direct message dispatcher used by checkAndUnlockGroupRooms when a character's
@@ -423,10 +529,16 @@ export default function App() {
           ? new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
           : existing.lastAnalysisTimestamp,
       };
-      return {
+      const nextMap = {
         ...prev,
         [charId]: updated,
       };
+      try {
+        localStorage.setItem('pulsedirect_score_breakdowns', JSON.stringify(nextMap));
+      } catch {
+        // ignore
+      }
+      return nextMap;
     });
 
     // Check if any DynamicGroupRoom threshold is now reached
@@ -437,6 +549,11 @@ export default function App() {
     );
 
     setGroupRooms(evaluatedRooms);
+    try {
+      localStorage.setItem('pulsedirect_group_rooms', JSON.stringify(evaluatedRooms));
+    } catch {
+      // ignore
+    }
 
     // Sync any newly unlocked room's persisted backlog into state
     evaluatedRooms.forEach(room => {
@@ -451,6 +568,39 @@ export default function App() {
           // ignore
         }
       }
+    });
+  };
+
+  /**
+   * Resets a single character's affinity back to 0 (Stranger tier)
+   */
+  const handleResetCharacterAffinity = (charId: string) => {
+    const nextAffinityMap: Record<string, number> = {
+      ...relationshipLevels,
+      [charId]: 0,
+    };
+    setRelationshipLevels(nextAffinityMap);
+    try {
+      localStorage.setItem('pulsedirect_relationship_levels', JSON.stringify(nextAffinityMap));
+    } catch {
+      // ignore
+    }
+    setScoreBreakdowns(prev => {
+      const next = {
+        ...prev,
+        [charId]: {
+          affinity: 0,
+          tier: 'Stranger' as const,
+          positiveTriggersCount: 0,
+          negativeTriggersCount: 0,
+        },
+      };
+      try {
+        localStorage.setItem('pulsedirect_score_breakdowns', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
     });
   };
 
@@ -602,10 +752,6 @@ export default function App() {
 
   useEffect(() => {
     refreshServerAiStatus();
-    const resetMap = clearAndResetStoredRelationshipProgression();
-    setRelationshipLevels(resetMap);
-    setScoreBreakdowns(buildBaselineScoreBreakdowns());
-    setGroupRooms(PRESET_GROUP_ROOMS.map(room => ({ ...room, isUnlocked: false, unlockedBy: undefined })));
   }, []);
 
   // Hotkeys: Double ESC for stealth disguise, Ctrl/Cmd+L for Lock
@@ -732,9 +878,14 @@ export default function App() {
       const bubbleText = bubbles[index];
       const fullDelay = calculateBubbleTypingDelayMs(char.id, bubbleText);
       const effectiveDelay =
-        index === 0 && options?.alreadyWaitedMs
-          ? Math.max(400, fullDelay - options.alreadyWaitedMs)
-          : fullDelay;
+        index === 0
+          ? Math.min(
+              1400,
+              options?.alreadyWaitedMs
+                ? Math.max(350, fullDelay - options.alreadyWaitedMs)
+                : fullDelay
+            )
+          : Math.min(1600, Math.max(700, Math.round(fullDelay * 0.45)));
 
       setIsTyping(true);
 
@@ -786,6 +937,29 @@ export default function App() {
     runBubbleStep(0);
   };
 
+  /**
+   * Builds the full character system instruction combining `system`, `systemInstruction`,
+   * live relationship score/tier context, and Response Director overrides.
+   */
+  const buildFullCharacterSystemPrompt = (char: Character): string => {
+    const directive = getCharacterDirective(char.id);
+    const primarySystem = directive.systemOverride || char.system || char.systemInstruction || '';
+    const extraSystem =
+      !directive.systemOverride &&
+      char.systemInstruction &&
+      char.system &&
+      !char.system.includes(char.systemInstruction)
+        ? `\n\n[ADDITIONAL CANON LORE & CONTINUITY]:\n${char.systemInstruction}`
+        : '';
+    const currentAffinity = relationshipLevels[char.id] ?? 0;
+    const currentTier = getRelationshipTierFromAffinity(currentAffinity);
+    const dynamicRelationshipBlock = `\n\n[CURRENT RELATIONSHIP & AFFINITY STATE]:
+- Current Affinity Score: ${currentAffinity} / 100 (Tier: ${currentTier}).
+- Baseline started at 0 (Stranger). Respond authentically according to this ${currentTier} relationship tier and your canon personality.`;
+    const directiveBlock = buildDirectivePromptBlock(char.id);
+    return `${primarySystem}${extraSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${directiveBlock}`;
+  };
+
   // Inbound spontaneous message (enforces strict 3–4 hour cooldown unless manually simulated)
   const triggerInboundAwayMessage = async (targetCharId?: string, isManualSimulation: boolean = false) => {
     const charId = targetCharId || activeCharId;
@@ -824,18 +998,19 @@ export default function App() {
     const historyContext = (burnerMode ? burnerChats[char.id] : chats[char.id]) || [];
 
     try {
-      const directive = getCharacterDirective(char.id);
-      const baseSystem = directive.systemOverride || char.system;
-      const directiveBlock = buildDirectivePromptBlock(char.id);
       const currentRelLevel = relationshipLevels[char.id] ?? 0;
+      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
 
       const memories = charMemories[char.id] || getCharacterMemories(char.id);
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
+        },
         body: JSON.stringify({
           prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${currentUser?.codename || 'them'}. Send a spontaneous, natural check-in text or share something new happening on your end in your canon voice (current relationship/affinity level: ${currentRelLevel} - ${getRelationshipTierFromAffinity(currentRelLevel)}). Max 2 short bubbles separated by ' || '.`,
-          systemInstruction: `${baseSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${directiveBlock}`,
+          systemInstruction: buildFullCharacterSystemPrompt(char),
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -851,7 +1026,7 @@ export default function App() {
         if (!hasServerAi) setHasServerAi(true);
       } else {
         setIsTyping(false);
-        setApiErrorBanner(data?.error || '⚠️ Gemini API quota / connection error');
+        setApiErrorBanner(data?.message || data?.error || '⚠️ Gemini API quota / connection error');
         return;
       }
     } catch {
@@ -962,6 +1137,7 @@ export default function App() {
     setActiveCharId(id);
     if (!activeConversationIds.includes(id)) {
       setActiveConversationIds(prev => [id, ...prev]);
+      incrementOperativeUserCount(id);
     }
     if (!chats[id]) {
       setChats(prev => ({ ...prev, [id]: [] }));
@@ -1029,12 +1205,16 @@ export default function App() {
     }
 
     try {
+      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
+        },
         body: JSON.stringify({
-          prompt: `[GROUP CHANNEL "${activeGroupRoom.name}"]: ${currentUser?.codename || 'Operative_07'} just said to the group: "${text.trim()}". Reply in-character as ${responderChar.name} in 1-2 short bubbles.`,
-          systemInstruction: responderChar.system,
+          prompt: `[GROUP CHANNEL "${activeGroupRoom.name}"]: ${currentUser?.codename || 'Operative_07'} just said to the group: "${text.trim()}". Reply in-character as ${responderChar.name} in 1-2 short bubbles separated by ' || '.`,
+          systemInstruction: buildFullCharacterSystemPrompt(responderChar),
           history: currentRoomHistory
             .filter(m => !m.isSystemDivider)
             .slice(-20)
@@ -1048,25 +1228,28 @@ export default function App() {
       setIsTyping(false);
 
       if (res.ok && data.text) {
-        const cleanReply = String(data.text).split('||')[0].trim();
-        playMessageReceivedSound();
-        const botMsg: BacklogMessage = {
-          id: `${activeGroupRoom.id}-b-${Date.now()}`,
-          senderId: responderChar.id,
-          senderName: responderChar.name,
-          avatarUrl: responderChar.avatar,
-          text: cleanReply,
-          timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-        };
-        const updatedList = [...currentRoomHistory, botMsg];
-        setGroupRoomMessages(prev => ({
-          ...prev,
-          [activeGroupRoom.id]: updatedList,
-        }));
-        try {
-          localStorage.setItem(`pulsedirect_messages_${activeGroupRoom.id}`, JSON.stringify(updatedList));
-        } catch {
-          // ignore
+        const replyBubbles = splitResponseIntoBubbles(String(data.text));
+        if (replyBubbles.length > 0) {
+          playMessageReceivedSound();
+          const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+          const botMsgs: BacklogMessage[] = replyBubbles.map((bText, idx) => ({
+            id: `${activeGroupRoom.id}-b-${Date.now()}-${idx}`,
+            senderId: responderChar.id,
+            senderName: responderChar.name,
+            avatarUrl: responderChar.avatarUrl || responderChar.avatar,
+            text: bText,
+            timestamp: nowTimeStr,
+          }));
+          const updatedList = [...currentRoomHistory, ...botMsgs];
+          setGroupRoomMessages(prev => ({
+            ...prev,
+            [activeGroupRoom.id]: updatedList,
+          }));
+          try {
+            localStorage.setItem(`pulsedirect_messages_${activeGroupRoom.id}`, JSON.stringify(updatedList));
+          } catch {
+            // ignore
+          }
         }
       }
     } catch {
@@ -1075,33 +1258,14 @@ export default function App() {
   };
 
   // Submit User Message with Spontaneous Context-Driven AI Generation & Sequential Typing
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, isRetry: boolean = false) => {
     if (!text.trim() || !activeChar) return;
 
     lastActivityRef.current = Date.now();
     isAwayRef.current = false;
     setIsAway(false);
 
-    playMessageSentSound();
-
-    // Evaluate live turn affinity change and check group room unlock thresholds
-    const turnEval = evaluateTurnAffinityChange(text, activeChar.id);
-    applyCharacterAffinityUpdate(activeChar.id, turnEval.delta, {
-      posHits: turnEval.posHits,
-      negHits: turnEval.negHits,
-    });
-
-    // Automatically extract user facts into character's memory bank
-    const newFacts = extractFactsFromUserMessage(text);
-    if (newFacts.length > 0) {
-      newFacts.forEach(f => {
-        const updated = addCharacterMemory(activeChar.id, f);
-        setCharMemories(prev => ({ ...prev, [activeChar.id]: updated }));
-      });
-    }
-
     const currentReply = replyingTo ? { ...replyingTo } : undefined;
-
     const userMessage: Message = {
       id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       sender: 'user',
@@ -1110,21 +1274,47 @@ export default function App() {
       replyTo: currentReply,
     };
 
-    if (burnerMode) {
-      setBurnerChats(prev => ({
-        ...prev,
-        [activeChar.id]: [...(prev[activeChar.id] || []), userMessage],
-      }));
-    } else {
-      setChats(prev => ({
-        ...prev,
-        [activeChar.id]: [...(prev[activeChar.id] || []), userMessage],
-      }));
+    const existingChatList = (burnerMode ? burnerChats[activeChar.id] : chats[activeChar.id]) || [];
+
+    if (!isRetry) {
+      playMessageSentSound();
+      incrementOperativeUserCount(activeChar.id);
+
+      // 1. Append user message to chat log FIRST so it remains preserved even if API errors or an invite DM is sent
+      if (burnerMode) {
+        setBurnerChats(prev => ({
+          ...prev,
+          [activeChar.id]: [...(prev[activeChar.id] || []), userMessage],
+        }));
+      } else {
+        setChats(prev => ({
+          ...prev,
+          [activeChar.id]: [...(prev[activeChar.id] || []), userMessage],
+        }));
+      }
+
+      setInputText('');
+      setReplyingTo(null);
+
+      // 2. Evaluate live turn affinity change and check group room unlock thresholds
+      const turnEval = evaluateTurnAffinityChange(text, activeChar.id);
+      applyCharacterAffinityUpdate(activeChar.id, turnEval.delta, {
+        posHits: turnEval.posHits,
+        negHits: turnEval.negHits,
+      });
+
+      // 3. Automatically extract user facts into character's memory bank
+      const newFacts = extractFactsFromUserMessage(text);
+      if (newFacts.length > 0) {
+        newFacts.forEach(f => {
+          const updated = addCharacterMemory(activeChar.id, f);
+          setCharMemories(prev => ({ ...prev, [activeChar.id]: updated }));
+        });
+      }
     }
 
-    setInputText('');
-    setReplyingTo(null);
     setIsTyping(true);
+    setApiErrorBanner(null);
 
     // If messaging the built-in Response Director (Pulse Architect), execute live behavior command
     if (activeChar.id === 'architect') {
@@ -1134,7 +1324,14 @@ export default function App() {
     }
 
     const requestStart = Date.now();
-    const historyContext = (burnerMode ? burnerChats[activeChar.id] : chats[activeChar.id]) || [];
+    // Exclude the trailing retried message if isRetry is true so prompt isn't duplicated
+    const historyContext =
+      isRetry &&
+      existingChatList.length > 0 &&
+      existingChatList[existingChatList.length - 1].sender === 'user' &&
+      existingChatList[existingChatList.length - 1].text === text.trim()
+        ? existingChatList.slice(0, -1)
+        : existingChatList;
     const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
 
     let replyText = '';
@@ -1145,16 +1342,17 @@ export default function App() {
         promptPayload = `[Replying directly to "${currentReply.text}" from ${currentReply.senderName}]: ${text.trim()}`;
       }
 
-      const directive = getCharacterDirective(activeChar.id);
-      const baseSystem = directive.systemOverride || activeChar.system;
-      const directiveBlock = buildDirectivePromptBlock(activeChar.id);
+      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
 
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
+        },
         body: JSON.stringify({
           prompt: promptPayload,
-          systemInstruction: `${baseSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${directiveBlock}`,
+          systemInstruction: buildFullCharacterSystemPrompt(activeChar),
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -1167,15 +1365,25 @@ export default function App() {
       if (res.ok && data.text && String(data.text).trim()) {
         replyText = String(data.text).trim();
         setApiErrorBanner(null);
+        setLastFailedMessageText(null);
         if (!hasServerAi) setHasServerAi(true);
       } else {
         setIsTyping(false);
-        setApiErrorBanner(data?.error || '⚠️ Gemini API quota / connection error');
+        setLastFailedMessageText(text.trim());
+        const errMessage =
+          data?.message ||
+          (data?.error === 'QUOTA_EXCEEDED'
+            ? '⚠️ Quota reached across candidate models. Click Retry or add a custom key in API Settings.'
+            : data?.error === 'INVALID_KEY'
+            ? '⚠️ Invalid Gemini API key. Open API Settings to update your key.'
+            : data?.error || '⚠️ Model connection error. Click Retry to resend.');
+        setApiErrorBanner(errMessage);
         return;
       }
     } catch {
       setIsTyping(false);
-      setApiErrorBanner('⚠️ Gemini API quota / connection error');
+      setLastFailedMessageText(text.trim());
+      setApiErrorBanner('⚠️ Network / model connection error. Click Retry to resend.');
       return;
     }
 
@@ -1269,17 +1477,17 @@ export default function App() {
     try {
       const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
       const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"`;
-
-      const directive = getCharacterDirective(activeChar.id);
-      const baseSystem = directive.systemOverride || activeChar.system;
-      const directiveBlock = buildDirectivePromptBlock(activeChar.id);
+      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
 
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
+        },
         body: JSON.stringify({
           prompt: promptPayload,
-          systemInstruction: `${baseSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${directiveBlock}`,
+          systemInstruction: buildFullCharacterSystemPrompt(activeChar),
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -1295,7 +1503,7 @@ export default function App() {
         if (!hasServerAi) setHasServerAi(true);
       } else {
         setIsTyping(false);
-        setApiErrorBanner(data?.error || '⚠️ Gemini API quota / connection error');
+        setApiErrorBanner(data?.message || data?.error || '⚠️ Gemini API quota / connection error');
         return;
       }
     } catch {
@@ -1313,6 +1521,7 @@ export default function App() {
   // Call Simulation
   const handleStartCall = (type: 'audio' | 'video') => {
     if (!activeChar) return;
+    clearCallTimers();
 
     setCallState({
       isOpen: true,
@@ -1323,7 +1532,7 @@ export default function App() {
       subtitle: 'Attempting encrypted audio link...',
     });
 
-    setTimeout(() => {
+    const t1 = setTimeout(() => {
       setCallState(prev => ({
         ...prev,
         phase: 'declined',
@@ -1331,7 +1540,7 @@ export default function App() {
         subtitle: `"${activeChar.name} is currently in a restricted environment."`,
       }));
 
-      setTimeout(() => {
+      const t2 = setTimeout(() => {
         setCallState(prev => ({ ...prev, isOpen: false }));
 
         let declineReason = "can't talk on phone right now, blitz is stomping around the kitchen. just text me.";
@@ -1360,7 +1569,9 @@ export default function App() {
           }));
         }
       }, 1400);
+      callTimersRef.current.push(t2);
     }, 3200);
+    callTimersRef.current.push(t1);
   };
 
   // Toggle Burner Mode
@@ -1527,16 +1738,13 @@ export default function App() {
 
   const activeTheme = THEME_DEFINITIONS[themeConfig.themeId] || THEME_DEFINITIONS.cyberpunk;
 
-  // Lookup requiredGroupAffinity for activeChar if they belong to a preset group room
-  const activeCharGroupThreshold = (() => {
-    if (!activeChar) return 30;
-    for (const room of groupRooms) {
-      if (room.memberConfigs[activeChar.id]) {
-        return room.memberConfigs[activeChar.id].requiredAffinity;
-      }
-    }
-    return 30;
-  })();
+  // Lookup group room info for activeChar if they belong to a preset group room
+  const activeCharGroupRoom = activeChar
+    ? groupRooms.find(room => Boolean(room.memberConfigs[activeChar.id]))
+    : undefined;
+  const activeCharGroupThreshold = activeChar && activeCharGroupRoom
+    ? activeCharGroupRoom.memberConfigs[activeChar.id].requiredAffinity
+    : 30;
 
   const activeCharScoreData: RelationshipScoreBreakdown = activeChar
     ? scoreBreakdowns[activeChar.id] || {
@@ -1580,7 +1788,10 @@ export default function App() {
       <SimulatedCallModal
         callState={callState}
         character={activeChar}
-        onEndCall={() => setCallState(prev => ({ ...prev, isOpen: false }))}
+        onEndCall={() => {
+          clearCallTimers();
+          setCallState(prev => ({ ...prev, isOpen: false }));
+        }}
       />
 
       {/* 4. Sinsta Story Viewer Modal (Unlocked Stories) */}
@@ -1736,7 +1947,10 @@ export default function App() {
           characterId={activeChar.id}
           scoreData={activeCharScoreData}
           requiredGroupAffinity={activeCharGroupThreshold}
+          groupRoomName={activeCharGroupRoom?.name}
+          isGroupRoomUnlocked={activeCharGroupRoom?.isUnlocked}
           onImportTranscript={handleImportTranscriptForActiveChar}
+          onResetAffinity={() => handleResetCharacterAffinity(activeChar.id)}
         />
       )}
 
@@ -1807,6 +2021,11 @@ export default function App() {
           setSettingsInitialTab('intelligence');
           setIsSettingsModalOpen(true);
         }}
+        onRetryLastMessage={
+          lastFailedMessageText
+            ? () => handleSendMessage(lastFailedMessageText, true)
+            : undefined
+        }
         isAway={isAway}
         autoAwayEnabled={autoAwayEnabled}
         replyingTo={replyingTo}

@@ -13,7 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import { Character, Message, UserProfile, DynamicGroupRoom } from '../types';
-import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
+import { resolveAvatarUrl, handleAvatarImageError, formatCompactNumber } from '../utils/avatarHelper';
 
 interface SidebarProps {
   characters: Character[];
@@ -160,7 +160,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Stories
           </span>
         </div>
-        <div className="flex items-center space-x-3 overflow-x-auto pb-1 scrollbar-none">
+        <div className="flex items-center space-x-3.5 overflow-x-auto no-scrollbar touch-pan-x pb-1 px-0.5">
           {storyChars.map(char => {
             const isFollowed = followedCharIds.includes(char.id);
             const isViewed = viewedStoryIds.includes(char.id);
@@ -194,8 +194,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
                 >
                   <img
-                    src={resolveAvatarUrl(char.avatar, char.id)}
+                    src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                     alt={char.name}
+                    referrerPolicy="no-referrer"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className={`w-full h-full rounded-full object-cover object-top border-2 border-[#0d0f17] bg-[#161a2b] ${
                       !isFollowed ? 'brightness-75' : isViewed ? 'brightness-90' : ''
@@ -228,7 +229,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             placeholder="Search conversations..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-[#131622]/90 border border-white/10 rounded-2xl pl-9 pr-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
+            className="w-full bg-[#131622]/90 border border-white/10 rounded-2xl pl-9 pr-3.5 py-2 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
           />
         </div>
       </div>
@@ -389,8 +390,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center space-x-3 min-w-0 flex-1">
                 <div className="relative w-11 h-11 rounded-full overflow-hidden border border-white/10 flex-shrink-0 bg-[#161a2b]">
                   <img
-                    src={resolveAvatarUrl(char.avatar, char.id)}
+                    src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                     alt={char.name}
+                    referrerPolicy="no-referrer"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className="w-full h-full rounded-full object-cover object-top group-hover:scale-105 transition"
                   />
@@ -400,13 +402,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <h4
-                      className={`text-xs font-semibold truncate ${
-                        isActive ? 'text-white' : 'text-slate-100'
-                      }`}
-                    >
-                      {char.name}
-                    </h4>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <h4
+                        className={`text-xs font-semibold truncate ${
+                          isActive ? 'text-white' : 'text-slate-100'
+                        }`}
+                      >
+                        {char.name}
+                      </h4>
+                      <span
+                        title={`${(char.userCount || 1200).toLocaleString()} operatives chatted`}
+                        className="inline-flex items-center gap-0.5 text-[10px] font-medium text-zinc-400 bg-zinc-800/80 px-1.5 py-0.2 rounded-full border border-zinc-700/50 flex-shrink-0"
+                      >
+                        <Users className="w-2.5 h-2.5 text-purple-400" />
+                        <span>{formatCompactNumber(char.userCount || 1200)}</span>
+                      </span>
+                    </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       {lastMsg?.timestamp && (
                         <span className="text-[10px] text-slate-500 font-mono">
@@ -477,6 +488,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               src={userProfile.avatarUrl}
               alt={userProfile.codename}
               referrerPolicy="no-referrer"
+              onError={(e) => handleAvatarImageError(e, userProfile.codename || 'Operative')}
               className="w-8 h-8 rounded-full border border-purple-500/40 flex-shrink-0 object-cover"
             />
           ) : (

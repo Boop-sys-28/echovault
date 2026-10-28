@@ -71,7 +71,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({
                 value={newFact}
                 onChange={(e) => setNewFact(e.target.value)}
                 placeholder={`e.g. "My favorite food is sweet matcha crepe" or "I practice Jujutsu"`}
-                className="flex-1 bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
+                className="flex-1 bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
               />
               <button
                 type="submit"

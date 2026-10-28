@@ -52,9 +52,11 @@ export interface Character {
   name: string;
   fullName?: string;
   tagline?: string;
+  role?: string;
   tag: string;
   universe: Universe;
   avatar: string;
+  avatarUrl?: string;
   storyImg?: string;
   storyText?: string;
   storyTime?: string;
@@ -62,6 +64,7 @@ export interface Character {
   status: string;
   themeAccent?: string;
   system: string;
+  systemInstruction?: string;
   online?: boolean;
   relationshipLevel?: number;
   affinity?: number;
@@ -69,6 +72,8 @@ export interface Character {
   trustScore?: number;
   bond?: number;
   relationshipTier?: 'Stranger' | 'Neutral' | string;
+  userCount?: number;
+  interactionCount?: number;
 }
 
 export interface ReplyReference {

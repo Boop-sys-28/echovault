@@ -73,8 +73,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         <div className="absolute top-6 inset-x-4 z-20 flex items-center justify-between text-white drop-shadow">
           <div className="flex items-center space-x-2.5">
             <img
-              src={resolveAvatarUrl(character.avatar, character.id)}
+              src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
+              referrerPolicy="no-referrer"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-9 h-9 rounded-full object-cover object-top border border-white/40 shadow-sm bg-[#1a1e2e]"
             />
@@ -98,6 +99,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           <img
             src={resolveAvatarUrl(character.storyImg, character.id)}
             alt="Story Media"
+            referrerPolicy="no-referrer"
             onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
             className="w-full h-full object-cover"
           />
@@ -111,13 +113,13 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         </div>
 
         {/* Reply Bar */}
-        <form onSubmit={handleSendReply} className="p-3 bg-zinc-950 border-t border-white/10 flex items-center gap-2">
+        <form onSubmit={handleSendReply} className="p-3 pb-[env(safe-area-inset-bottom)] pb-safe bg-zinc-950 border-t border-white/10 flex items-center gap-2">
           <input
             type="text"
             placeholder="Reply to story..."
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
-            className="flex-1 bg-white/10 border border-white/15 rounded-full px-4 py-2 text-xs text-white placeholder-zinc-400 focus:outline-none focus:border-purple-500 transition"
+            className="flex-1 bg-white/10 border border-white/15 rounded-full px-4 py-2 text-base sm:text-xs text-white placeholder-zinc-400 focus:outline-none focus:border-purple-500 transition"
           />
           <button
             type="submit"

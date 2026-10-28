@@ -1,5 +1,6 @@
 import React from 'react';
-import { X, ExternalLink, Download } from 'lucide-react';
+import { X, ExternalLink } from 'lucide-react';
+import { handleAvatarImageError } from '../utils/avatarHelper';
 
 interface ImageLightboxModalProps {
   imageUrl: string;
@@ -54,6 +55,8 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
           <img
             src={imageUrl}
             alt="Full Preview"
+            referrerPolicy="no-referrer"
+            onError={(e) => handleAvatarImageError(e, senderName || 'Preview')}
             className="max-h-[78vh] w-auto max-w-full object-contain select-none"
           />
         </div>

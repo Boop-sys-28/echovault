@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Character, Message, CaiImportResult } from '../types';
 import { resolveCaiLink, CAI_LINK_PRESETS, CaiLinkPreset } from '../utils/caiImporter';
+import { handleAvatarImageError } from '../utils/avatarHelper';
 
 interface CaiImportModalProps {
   isOpen: boolean;
@@ -216,6 +217,8 @@ export const CaiImportModal: React.FC<CaiImportModalProps> = ({
                     <img
                       src={preset.avatar}
                       alt={preset.name}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => handleAvatarImageError(e, preset.name)}
                       className="w-7 h-7 rounded-full object-cover object-top border border-white/15 flex-shrink-0 bg-zinc-900"
                     />
                     <div className="min-w-0">

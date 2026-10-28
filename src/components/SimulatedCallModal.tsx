@@ -27,8 +27,9 @@ export const SimulatedCallModal: React.FC<SimulatedCallModalProps> = ({
         <div className="relative">
           <div className="w-28 h-28 rounded-full p-1 story-gradient animate-pulse shadow-2xl shadow-purple-600/20">
             <img
-              src={resolveAvatarUrl(character.avatar, character.id)}
+              src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
+              referrerPolicy="no-referrer"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-zinc-950 bg-[#1a1e2e]"
             />
