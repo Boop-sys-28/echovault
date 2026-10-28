@@ -9,34 +9,36 @@ import { GoogleGenAI } from '@google/genai';
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
 const DEFAULT_CONFIGURED_GEMINI_KEY =
-  'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
+  'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
+
+function isStaleToken(key: string): boolean {
+  const k = key.trim();
+  return (
+    !k ||
+    k === 'MY_GEMINI_API_KEY' ||
+    k === 'YOUR_GEMINI_API_KEY' ||
+    k.startsWith('AQ.Ab8RN6KdKpn8X4') ||
+    k.startsWith('AQ.Ab8RN6KeetZWTW') ||
+    k.startsWith('AQ.Ab8RN6K4pHZaY')
+  );
+}
+
+// Ensure process.env.GEMINI_API_KEY uses the active configured key if the container env has a stale token
+if (!process.env.GEMINI_API_KEY || isStaleToken(process.env.GEMINI_API_KEY)) {
+  process.env.GEMINI_API_KEY = DEFAULT_CONFIGURED_GEMINI_KEY;
+}
 
 /**
  * Helper to resolve the active Gemini API key from environment, .env file, or configured default.
  */
 function getActiveGeminiKey(): string {
-  const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
-  if (
-    envKey &&
-    envKey !== 'MY_GEMINI_API_KEY' &&
-    envKey !== 'YOUR_GEMINI_API_KEY' &&
-    envKey.trim().length > 10
-  ) {
-    return envKey.trim();
-  }
-
   try {
     if (fs.existsSync(ENV_FILE_PATH)) {
       const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
       const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
       if (match && match[1]) {
         const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
-        if (
-          fileKey &&
-          fileKey !== 'MY_GEMINI_API_KEY' &&
-          fileKey !== 'YOUR_GEMINI_API_KEY' &&
-          fileKey.length > 10
-        ) {
+        if (fileKey && !isStaleToken(fileKey) && fileKey.length > 10) {
           process.env.GEMINI_API_KEY = fileKey;
           return fileKey;
         }
@@ -44,6 +46,11 @@ function getActiveGeminiKey(): string {
     }
   } catch {
     // ignore read error
+  }
+
+  const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  if (envKey && !isStaleToken(envKey) && envKey.trim().length > 10) {
+    return envKey.trim();
   }
 
   return DEFAULT_CONFIGURED_GEMINI_KEY;
@@ -75,12 +82,15 @@ function saveGeminiKey(newKey: string): void {
 }
 
 const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-flash-latest',
-  'gemini-2.5-pro',
-  'gemini-1.5-flash',
+  'gemini-robotics-er-2-preview',
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite-preview',
   'gemini-3.1-flash-lite',
-  'gemini-3.8-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
 ];
 
 function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 16000): Promise<T> {
@@ -101,14 +111,101 @@ function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 16000): Pr
 }
 
 function createGenAiClient(apiKey: string): GoogleGenAI {
+  const trimmedKey = apiKey.trim();
   return new GoogleGenAI({
-    apiKey,
+    apiKey: trimmedKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+/**
+ * Executes generateContent for a candidate model.
+ * Uses the GoogleGenAI SDK client first, and if an `AQ.` token returns `ACCESS_TOKEN_TYPE_UNSUPPORTED`
+ * (or 401), retries via standard REST fetch with `Authorization: Bearer <KEY>`.
+ * Preserves 429/503/404 status codes so the candidate model loop advances cleanly.
+ */
+async function generateContentWithKey(
+  apiKey: string,
+  ai: GoogleGenAI,
+  params: {
+    model: string;
+    contents: any;
+    config?: {
+      systemInstruction?: string;
+      temperature?: number;
+      topP?: number;
+    };
+  }
+): Promise<{ text: string }> {
+  const trimmedKey = apiKey.trim();
+
+  try {
+    const response = await ai.models.generateContent(params);
+    return { text: response.text || '' };
+  } catch (sdkErr: any) {
+    const sdkMsg = String(sdkErr?.message || '');
+    // Only attempt Authorization: Bearer fallback if the key begins with AQ. and SDK returned 401 / ACCESS_TOKEN_TYPE_UNSUPPORTED
+    if (
+      trimmedKey.startsWith('AQ.') &&
+      (sdkErr?.status === 401 || sdkMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED'))
+    ) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        params.model
+      )}:generateContent`;
+
+      const normalizedContents =
+        typeof params.contents === 'string'
+          ? [{ role: 'user', parts: [{ text: params.contents }] }]
+          : params.contents;
+
+      const restPayload: Record<string, any> = {
+        contents: normalizedContents,
+      };
+
+      if (params.config?.systemInstruction) {
+        restPayload.systemInstruction = {
+          parts: [{ text: params.config.systemInstruction }],
+        };
+      }
+
+      if (
+        params.config?.temperature !== undefined ||
+        params.config?.topP !== undefined
+      ) {
+        restPayload.generationConfig = {
+          ...(params.config.temperature !== undefined
+            ? { temperature: params.config.temperature }
+            : {}),
+          ...(params.config.topP !== undefined ? { topP: params.config.topP } : {}),
+        };
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${trimmedKey}`,
+          'User-Agent': 'aistudio-build',
+        },
+        body: JSON.stringify(restPayload),
+      });
+
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const text = parts
+          .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+          .join('');
+        return { text };
+      }
+    }
+
+    throw sdkErr;
+  }
 }
 
 /**
@@ -205,7 +302,7 @@ async function startServer() {
       for (const modelName of CANDIDATE_MODELS) {
         try {
           const testResponse = await withModelTimeout(
-            ai.models.generateContent({
+            generateContentWithKey(candidate, ai, {
               model: modelName,
               contents: 'Reply with OK',
             }),
@@ -450,13 +547,18 @@ async function startServer() {
         : Array.isArray(headerKeyRaw)
         ? headerKeyRaw[0]?.trim()
         : '';
-    const customApiKey = headerApiKey || (typeof bodyApiKey === 'string' ? bodyApiKey.trim() : '');
+    const customApiKey =
+      headerApiKey && !isStaleToken(headerApiKey)
+        ? headerApiKey
+        : typeof bodyApiKey === 'string' && !isStaleToken(bodyApiKey)
+        ? bodyApiKey.trim()
+        : '';
     const serverEnvKey = getActiveGeminiKey();
 
-    // Prioritize custom key and server environment key across the candidate pool
+    // Prioritize valid custom key and active configured key across the candidate pool
     const candidateKeys = Array.from(
       new Set(
-        [customApiKey, serverEnvKey, DEFAULT_CONFIGURED_GEMINI_KEY].filter(
+        [customApiKey, DEFAULT_CONFIGURED_GEMINI_KEY, serverEnvKey].filter(
           k => k && k.length > 10
         )
       )
@@ -526,11 +628,16 @@ async function startServer() {
           )
       : [];
 
+    const baseSystemStr = String(systemInstruction || '');
+    const missingMemories = cleanMemories.filter(
+      (m: string) => !baseSystemStr.toLowerCase().includes(m.toLowerCase())
+    );
+
     const memorySection =
-      cleanMemories.length > 0
-        ? `\n\n[BACKGROUND KNOWLEDGE ABOUT THE USER (Never quote verbatim; only weave in naturally if relevant)]:\n${cleanMemories
-            .slice(0, 50)
-            .map((m: string) => `- ${m}`)
+      missingMemories.length > 0
+        ? `\n\n[CHARACTER.AI EPISODIC MEMORY VAULT — ACTIVE RECALL FOR THIS USER]:\nYou actively remember the following personal details, facts, preferences, and shared history about the user from your Memory Vault. Recall and weave them naturally into your replies whenever relevant (or when the user asks what you remember about them):\n${missingMemories
+            .slice(0, 75)
+            .map((m: string, idx: number) => `${idx + 1}. ${m}`)
             .join('\n')}`
         : '';
 
@@ -541,7 +648,7 @@ async function startServer() {
 - DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages.
 - MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
 
-    const fullSystemInstruction = `${systemInstruction || ''}${memorySection}${unconstrainedCaiDirective}`;
+    const fullSystemInstruction = `${baseSystemStr}${memorySection}${unconstrainedCaiDirective}`;
 
     const generationConfig = {
       systemInstruction: fullSystemInstruction,
@@ -549,82 +656,146 @@ async function startServer() {
       topP: 0.95,
     };
 
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const isDailyQuotaExhaustedError = (err: any): boolean => {
+      const msg = String(err?.message || err || '');
+      return (
+        msg.includes('GenerateRequestsPerDayPerProjectPerModel') ||
+        msg.includes('requests per day limit exceeded')
+      );
+    };
+    const isRetryableTransientError = (err: any): boolean => {
+      if (isDailyQuotaExhaustedError(err)) return false;
+      const msg = String(err?.message || err || '');
+      const status = Number(err?.status || 0);
+      return (
+        isQuotaError(err) ||
+        status === 429 ||
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        msg.includes('503') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('MODEL_TIMEOUT') ||
+        msg.includes('overloaded') ||
+        msg.includes('high demand') ||
+        msg.includes('fetch failed')
+      );
+    };
+
     let lastError: any = null;
+    let nonAuthError: any = null;
+    const MAX_BACKOFF_PASSES = 3;
 
     for (const activeKey of candidateKeys) {
       const ai = createGenAiClient(activeKey);
+      let keyInvalid = false;
+      const dailyExhaustedModels = new Set<string>();
 
-      for (const modelName of CANDIDATE_MODELS) {
-        try {
-          let response;
-          try {
-            response = await withModelTimeout(
-              ai.models.generateContent({
-                model: modelName,
-                contents: formattedContents,
-                config: generationConfig,
-              }),
-              16000
-            );
-          } catch (innerErr: any) {
-            // If optional generation parameters trigger a 400 error, retry with minimal sanitized config
-            const errMsg = String(innerErr?.message || '');
-            if (innerErr?.status === 400 && !isInvalidKeyError(innerErr) && !errMsg.includes('not found')) {
-              response = await withModelTimeout(
-                ai.models.generateContent({
-                  model: modelName,
-                  contents: formattedContents,
-                  config: { systemInstruction: fullSystemInstruction },
-                }),
-                16000
-              );
-            } else {
-              throw innerErr;
+      for (let pass = 0; pass < MAX_BACKOFF_PASSES; pass++) {
+        if (pass > 0) {
+          // Exponential backoff with jitter between passes across candidate models
+          const passDelayMs = Math.min(4500, 650 * Math.pow(2, pass - 1) + Math.floor(Math.random() * 300));
+          await sleep(passDelayMs);
+        }
+
+        for (const modelName of CANDIDATE_MODELS) {
+          if (dailyExhaustedModels.has(modelName)) continue;
+
+          // Per-model retry with exponential backoff for transient 429/503 spikes
+          const maxModelAttempts = pass === 0 ? 2 : 1;
+
+          for (let attempt = 0; attempt < maxModelAttempts; attempt++) {
+            if (attempt > 0) {
+              const attemptDelayMs = 450 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
+              await sleep(attemptDelayMs);
+            }
+
+            try {
+              let response;
+              try {
+                response = await withModelTimeout(
+                  generateContentWithKey(activeKey, ai, {
+                    model: modelName,
+                    contents: formattedContents,
+                    config: generationConfig,
+                  }),
+                  10000
+                );
+              } catch (innerErr: any) {
+                const errMsg = String(innerErr?.message || '');
+                if (
+                  innerErr?.status === 400 &&
+                  !isInvalidKeyError(innerErr) &&
+                  !errMsg.includes('not found')
+                ) {
+                  response = await withModelTimeout(
+                    generateContentWithKey(activeKey, ai, {
+                      model: modelName,
+                      contents: formattedContents,
+                      config: { systemInstruction: fullSystemInstruction },
+                    }),
+                    10000
+                  );
+                } else {
+                  throw innerErr;
+                }
+              }
+
+              const rawText = response.text || '';
+              const formattedText = formatCharacterBubbles(rawText);
+
+              if (formattedText) {
+                return res.json({
+                  text: formattedText,
+                  modelUsed: modelName,
+                });
+              }
+            } catch (error: any) {
+              lastError = error;
+
+              if (isInvalidKeyError(error)) {
+                keyInvalid = true;
+                break;
+              } else {
+                nonAuthError = error;
+                if (isDailyQuotaExhaustedError(error)) {
+                  dailyExhaustedModels.add(modelName);
+                  break;
+                }
+                // Only retry the same model immediately if it's a transient rate-limit or 503 error
+                if (!isRetryableTransientError(error)) {
+                  break;
+                }
+              }
             }
           }
 
-          const rawText = response.text || '';
-          const formattedText = formatCharacterBubbles(rawText);
-
-          if (formattedText) {
-            return res.json({
-              text: formattedText,
-              modelUsed: modelName,
-            });
-          }
-        } catch (error: any) {
-          lastError = error;
-
-          if (isInvalidKeyError(error)) {
-            // Break out of model loop for this key and try next key if available
-            break;
-          }
+          if (keyInvalid) break;
         }
+
+        if (keyInvalid) break;
       }
     }
 
-    if (lastError) {
-      console.warn(
-        'Gemini API error across candidate models:',
-        lastError?.status || lastError?.message || lastError
-      );
-    }
+    const effectiveError = nonAuthError || lastError;
 
-    if (isInvalidKeyError(lastError)) {
+    if (isInvalidKeyError(effectiveError)) {
       return res.status(401).json({
         error: 'INVALID_KEY',
         message: 'Invalid Gemini API key. Open Settings > Intelligence to update or clear your custom API key.',
         reason: 'INVALID_KEY',
-        details: String(lastError?.message || 'Invalid API key'),
+        details: String(effectiveError?.message || 'Invalid API key'),
       });
     }
 
-    if (isQuotaError(lastError)) {
+    if (isQuotaError(effectiveError)) {
       return res.status(429).json({
         error: 'QUOTA_EXCEEDED',
         message: 'Gemini API rate limit or quota reached across active models. Wait a moment and click Retry, or add a custom API key in Settings.',
         reason: 'QUOTA_EXCEEDED',
-        details: String(lastError?.message || 'Quota exceeded'),
+        details: String(effectiveError?.message || 'Quota exceeded'),
       });
     }
 
@@ -632,7 +803,7 @@ async function startServer() {
       error: 'MODEL_ERROR',
       message: 'Temporary connection issue with Gemini model endpoint. Click Retry to resend your message.',
       reason: 'MODEL_ERROR',
-      details: String(lastError?.message || 'Unable to reach Gemini API'),
+      details: String(effectiveError?.message || 'Unable to reach Gemini API'),
     });
   });
 
