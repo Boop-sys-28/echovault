@@ -182,25 +182,23 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   }, [currentPin, tabBlurLock, doubleEscStealth, defaultBurnerOnStartup, isOpen]);
 
   // --- Tab 4: AI Engine & Intelligence State ---
-  const DEFAULT_USER_GEMINI_KEY =
-    'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
   const [customApiKey, setCustomApiKey] = useState<string>(() => {
     try {
       const saved =
         localStorage.getItem('custom_gemini_api_key') ??
-        localStorage.getItem('pulsedirect_custom_gemini_key');
-      if (
-        saved !== null &&
-        saved !== 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA' &&
-        saved !== 'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w'
-      ) {
-        return saved;
+        localStorage.getItem('pulsedirect_custom_gemini_key') ??
+        '';
+      const legacyDefaultKeys = [
+        'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw',
+        'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA',
+        'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w',
+      ];
+      if (saved && legacyDefaultKeys.includes(saved.trim())) {
+        return '';
       }
-      localStorage.setItem('custom_gemini_api_key', DEFAULT_USER_GEMINI_KEY);
-      localStorage.setItem('pulsedirect_custom_gemini_key', DEFAULT_USER_GEMINI_KEY);
-      return DEFAULT_USER_GEMINI_KEY;
+      return saved.trim();
     } catch {
-      return DEFAULT_USER_GEMINI_KEY;
+      return '';
     }
   });
   const [showCustomApiKey, setShowCustomApiKey] = useState<boolean>(false);
@@ -218,10 +216,16 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     try {
-      const storedKey =
+      const raw =
         localStorage.getItem('custom_gemini_api_key') ??
         localStorage.getItem('pulsedirect_custom_gemini_key') ??
-        DEFAULT_USER_GEMINI_KEY;
+        '';
+      const legacyDefaultKeys = [
+        'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw',
+        'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA',
+        'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w',
+      ];
+      const storedKey = legacyDefaultKeys.includes(raw.trim()) ? '' : raw.trim();
       setCustomApiKey(storedKey);
     } catch {
       // ignore

@@ -156,6 +156,34 @@ function buildBaselineScoreBreakdowns(): Record<string, RelationshipScoreBreakdo
   return map;
 }
 
+/**
+ * Retrieves the custom Gemini API key only if explicitly entered by the user.
+ * If no custom key was explicitly entered, returns an empty string so that
+ * the x-gemini-api-key header is omitted, allowing server.ts to use process.env.GEMINI_API_KEY directly.
+ */
+function getExplicitCustomApiKey(): string {
+  try {
+    const raw =
+      localStorage.getItem('custom_gemini_api_key') ||
+      localStorage.getItem('pulsedirect_custom_gemini_key') ||
+      '';
+    const trimmed = raw.trim();
+    const legacyDefaultKeys = [
+      'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw',
+      'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA',
+      'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w',
+    ];
+    if (trimmed && legacyDefaultKeys.includes(trimmed)) {
+      localStorage.removeItem('custom_gemini_api_key');
+      localStorage.removeItem('pulsedirect_custom_gemini_key');
+      return '';
+    }
+    return trimmed;
+  } catch {
+    return '';
+  }
+}
+
 export default function App() {
   const [themeConfig, setThemeConfig] = useState<AppThemeConfig>(loadSavedThemeConfig);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -761,16 +789,17 @@ export default function App() {
   };
 
   useEffect(() => {
+    // If a previously hardcoded default key is lingering in localStorage, clear it
     try {
-      const defaultKey = 'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
       const current = localStorage.getItem('custom_gemini_api_key');
-      if (
-        !current ||
-        current === 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA' ||
-        current === 'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w'
-      ) {
-        localStorage.setItem('custom_gemini_api_key', defaultKey);
-        localStorage.setItem('pulsedirect_custom_gemini_key', defaultKey);
+      const legacyDefaultKeys = [
+        'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw',
+        'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA',
+        'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w',
+      ];
+      if (current && legacyDefaultKeys.includes(current.trim())) {
+        localStorage.removeItem('custom_gemini_api_key');
+        localStorage.removeItem('pulsedirect_custom_gemini_key');
       }
     } catch {
       // ignore
@@ -975,6 +1004,7 @@ export default function App() {
   ): Promise<{ ok: boolean; status: number; data: any }> => {
     let lastStatus = 500;
     let lastData: any = {};
+    const trimmedKey = (customKey || '').trim();
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
@@ -982,12 +1012,17 @@ export default function App() {
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
       try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        // If no custom key is explicitly entered by the user, do not send the x-gemini-api-key header
+        if (trimmedKey) {
+          headers['x-gemini-api-key'] = trimmedKey;
+        }
+
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(customKey ? { 'x-gemini-api-key': customKey } : {}),
-          },
+          headers,
           body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
@@ -1048,10 +1083,7 @@ export default function App() {
 
     try {
       const currentRelLevel = relationshipLevels[char.id] ?? 0;
-      const customStoredKey =
-        localStorage.getItem('custom_gemini_api_key') ||
-        localStorage.getItem('pulsedirect_custom_gemini_key') ||
-        '';
+      const customStoredKey = getExplicitCustomApiKey();
 
       const memories = getMergedCharacterMemories(char.id, charMemories[char.id]);
       const { ok, data } = await postChatWithBackoff(
@@ -1259,10 +1291,7 @@ export default function App() {
 
     const requestStart = Date.now();
     try {
-      const customStoredKey =
-        localStorage.getItem('custom_gemini_api_key') ||
-        localStorage.getItem('pulsedirect_custom_gemini_key') ||
-        '';
+      const customStoredKey = getExplicitCustomApiKey();
       const responderMemories = getMergedCharacterMemories(
         responderChar.id,
         charMemories[responderChar.id]
@@ -1431,10 +1460,7 @@ export default function App() {
         promptPayload = `[Replying directly to "${currentReply.text}" from ${currentReply.senderName}]: ${text.trim()}`;
       }
 
-      const customStoredKey =
-        localStorage.getItem('custom_gemini_api_key') ||
-        localStorage.getItem('pulsedirect_custom_gemini_key') ||
-        '';
+      const customStoredKey = getExplicitCustomApiKey();
 
       // Build systemInstruction with all extracted memories injected directly inside it
       const systemInstructionWithMemories = buildFullCharacterSystemPrompt(
@@ -1570,10 +1596,7 @@ export default function App() {
     try {
       const memories = getMergedCharacterMemories(activeChar.id, charMemories[activeChar.id]);
       const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"`;
-      const customStoredKey =
-        localStorage.getItem('custom_gemini_api_key') ||
-        localStorage.getItem('pulsedirect_custom_gemini_key') ||
-        '';
+      const customStoredKey = getExplicitCustomApiKey();
 
       const { ok, data } = await postChatWithBackoff(
         {
