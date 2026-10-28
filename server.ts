@@ -555,10 +555,10 @@ async function startServer() {
         : '';
     const serverEnvKey = getActiveGeminiKey();
 
-    // Prioritize valid custom key and active configured key across the candidate pool
+    // Prioritize valid custom key if explicitly sent from client; otherwise use serverEnvKey (process.env.GEMINI_API_KEY) directly
     const candidateKeys = Array.from(
       new Set(
-        [customApiKey, DEFAULT_CONFIGURED_GEMINI_KEY, serverEnvKey].filter(
+        [customApiKey, serverEnvKey, DEFAULT_CONFIGURED_GEMINI_KEY].filter(
           k => k && k.length > 10
         )
       )
