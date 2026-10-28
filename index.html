@@ -15,6 +15,17 @@
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body class="bg-[#090a0f] text-slate-100 font-sans h-[100dvh] w-screen overflow-hidden select-none antialiased">
+    <script>
+      window.addEventListener('unhandledrejection', function (event) {
+        var msg = (event.reason && event.reason.message) || String(event.reason || '');
+        if (
+          msg.indexOf('WebSocket closed without opened') !== -1 ||
+          msg.indexOf('failed to connect to websocket') !== -1
+        ) {
+          event.preventDefault();
+        }
+      });
+    </script>
     <div id="root" class="h-full w-full"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

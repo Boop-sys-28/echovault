@@ -8,8 +8,11 @@ import { GoogleGenAI } from '@google/genai';
 
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
+const DEFAULT_CONFIGURED_GEMINI_KEY =
+  'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
+
 /**
- * Helper to resolve the active Gemini API key from environment or .env file.
+ * Helper to resolve the active Gemini API key from environment, .env file, or configured default.
  */
 function getActiveGeminiKey(): string {
   const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
@@ -43,7 +46,7 @@ function getActiveGeminiKey(): string {
     // ignore read error
   }
 
-  return '';
+  return DEFAULT_CONFIGURED_GEMINI_KEY;
 }
 
 /**
@@ -450,9 +453,13 @@ async function startServer() {
     const customApiKey = headerApiKey || (typeof bodyApiKey === 'string' ? bodyApiKey.trim() : '');
     const serverEnvKey = getActiveGeminiKey();
 
-    // Prioritize custom key if provided, with fallback to server environment key
+    // Prioritize custom key and server environment key across the candidate pool
     const candidateKeys = Array.from(
-      new Set([customApiKey, serverEnvKey].filter(k => k && k.length > 10))
+      new Set(
+        [customApiKey, serverEnvKey, DEFAULT_CONFIGURED_GEMINI_KEY].filter(
+          k => k && k.length > 10
+        )
+      )
     );
 
     if (candidateKeys.length === 0) {

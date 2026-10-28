@@ -29,6 +29,7 @@ import {
   Users,
   Zap,
   ChevronRight,
+  Key,
 } from 'lucide-react';
 import {
   AppThemeConfig,
@@ -99,6 +100,7 @@ interface UnifiedSettingsModalProps {
   hasServerAi: boolean;
   onRefreshServerStatus: () => Promise<boolean>;
   onOpenCaiImportModal: () => void;
+  onClearApiError?: () => void;
   // Storage & Memory Vault
   chats: Record<string, Message[]>;
   charMemories: Record<string, string[]>;
@@ -128,6 +130,7 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   hasServerAi,
   onRefreshServerStatus,
   onOpenCaiImportModal,
+  onClearApiError,
   chats,
   onRefreshMemories,
 }) => {
@@ -178,6 +181,23 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   }, [currentPin, tabBlurLock, doubleEscStealth, defaultBurnerOnStartup, isOpen]);
 
   // --- Tab 4: AI Engine & Intelligence State ---
+  const DEFAULT_USER_GEMINI_KEY =
+    'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
+  const [customApiKey, setCustomApiKey] = useState<string>(() => {
+    try {
+      const saved =
+        localStorage.getItem('custom_gemini_api_key') ??
+        localStorage.getItem('pulsedirect_custom_gemini_key');
+      if (saved !== null) return saved;
+      localStorage.setItem('custom_gemini_api_key', DEFAULT_USER_GEMINI_KEY);
+      localStorage.setItem('pulsedirect_custom_gemini_key', DEFAULT_USER_GEMINI_KEY);
+      return DEFAULT_USER_GEMINI_KEY;
+    } catch {
+      return DEFAULT_USER_GEMINI_KEY;
+    }
+  });
+  const [showCustomApiKey, setShowCustomApiKey] = useState<boolean>(false);
+  const [apiKeySavedStatus, setApiKeySavedStatus] = useState<'saved' | 'reset' | null>(null);
   const [typingPreset, setTypingPreset] = useState<GlobalTypingSpeedPreset>(() =>
     getGlobalTypingSpeedPreset()
   );
@@ -190,6 +210,15 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    try {
+      const storedKey =
+        localStorage.getItem('custom_gemini_api_key') ??
+        localStorage.getItem('pulsedirect_custom_gemini_key') ??
+        DEFAULT_USER_GEMINI_KEY;
+      setCustomApiKey(storedKey);
+    } catch {
+      // ignore
+    }
     setTypingPreset(getGlobalTypingSpeedPreset());
     const currentDir = getCharacterDirective(selectedTargetChar);
     setDirMood(currentDir.mood);
@@ -354,6 +383,37 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
     setCheckingEngine(true);
     await onRefreshServerStatus();
     setTimeout(() => setCheckingEngine(false), 400);
+  };
+
+  const handleSaveCustomApiKey = () => {
+    const trimmed = customApiKey.trim();
+    try {
+      if (trimmed) {
+        localStorage.setItem('custom_gemini_api_key', trimmed);
+        localStorage.setItem('pulsedirect_custom_gemini_key', trimmed);
+      } else {
+        localStorage.removeItem('custom_gemini_api_key');
+        localStorage.removeItem('pulsedirect_custom_gemini_key');
+      }
+    } catch {
+      // ignore storage errors
+    }
+    onClearApiError?.();
+    setApiKeySavedStatus(trimmed ? 'saved' : 'reset');
+    setTimeout(() => setApiKeySavedStatus(null), 2200);
+  };
+
+  const handleResetCustomApiKey = () => {
+    setCustomApiKey('');
+    try {
+      localStorage.removeItem('custom_gemini_api_key');
+      localStorage.removeItem('pulsedirect_custom_gemini_key');
+    } catch {
+      // ignore storage errors
+    }
+    onClearApiError?.();
+    setApiKeySavedStatus('reset');
+    setTimeout(() => setApiKeySavedStatus(null), 2200);
   };
 
   // Handlers for Tab 5: Storage & Memory Vault
@@ -1230,6 +1290,81 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
             ========================================================= */}
             {activeTab === 'intelligence' && (
               <div className="space-y-5 max-w-3xl">
+                {/* Gemini API Configuration Card */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-950/40 via-purple-950/30 to-zinc-900/60 border border-purple-500/30 space-y-3.5 shadow-lg">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        <Key className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Gemini API Configuration</span>
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Enter your personal Gemini API key, or clear the field to revert to the server default.
+                      </p>
+                    </div>
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded-full border shrink-0 ${
+                        customApiKey.trim()
+                          ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                          : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      }`}
+                    >
+                      {customApiKey.trim() ? 'Custom Key Active' : 'Server Default'}
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type={showCustomApiKey ? 'text' : 'password'}
+                      value={customApiKey}
+                      onChange={e => setCustomApiKey(e.target.value)}
+                      placeholder="AIzaSy... (Leave empty to use server default)"
+                      className="w-full bg-zinc-950/90 border border-white/15 rounded-xl pl-3.5 pr-10 py-2.5 text-base sm:text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomApiKey(prev => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition cursor-pointer"
+                      title={showCustomApiKey ? 'Hide API Key' : 'Show API Key'}
+                    >
+                      {showCustomApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={handleSaveCustomApiKey}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-xs font-bold text-white shadow-md shadow-purple-600/25 flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Save Key</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleResetCustomApiKey}
+                        className="px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-semibold text-slate-300 hover:text-white flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset to Server Default</span>
+                      </button>
+                    </div>
+
+                    {apiKeySavedStatus && (
+                      <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>
+                          {apiKeySavedStatus === 'saved'
+                            ? 'Personal Gemini API key saved!'
+                            : 'Reverted to server default key!'}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
                 {/* Connection & Orchestration Status */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="space-y-1">

@@ -751,6 +751,15 @@ export default function App() {
   };
 
   useEffect(() => {
+    try {
+      const defaultKey = 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
+      if (!localStorage.getItem('custom_gemini_api_key')) {
+        localStorage.setItem('custom_gemini_api_key', defaultKey);
+        localStorage.setItem('pulsedirect_custom_gemini_key', defaultKey);
+      }
+    } catch {
+      // ignore
+    }
     refreshServerAiStatus();
   }, []);
 
@@ -999,7 +1008,10 @@ export default function App() {
 
     try {
       const currentRelLevel = relationshipLevels[char.id] ?? 0;
-      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
+      const customStoredKey =
+        localStorage.getItem('custom_gemini_api_key') ||
+        localStorage.getItem('pulsedirect_custom_gemini_key') ||
+        '';
 
       const memories = charMemories[char.id] || getCharacterMemories(char.id);
       const res = await fetch('/api/chat', {
@@ -1205,7 +1217,10 @@ export default function App() {
     }
 
     try {
-      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
+      const customStoredKey =
+        localStorage.getItem('custom_gemini_api_key') ||
+        localStorage.getItem('pulsedirect_custom_gemini_key') ||
+        '';
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -1342,7 +1357,10 @@ export default function App() {
         promptPayload = `[Replying directly to "${currentReply.text}" from ${currentReply.senderName}]: ${text.trim()}`;
       }
 
-      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
+      const customStoredKey =
+        localStorage.getItem('custom_gemini_api_key') ||
+        localStorage.getItem('pulsedirect_custom_gemini_key') ||
+        '';
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -1477,7 +1495,10 @@ export default function App() {
     try {
       const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
       const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"`;
-      const customStoredKey = localStorage.getItem('pulsedirect_custom_gemini_key') || '';
+      const customStoredKey =
+        localStorage.getItem('custom_gemini_api_key') ||
+        localStorage.getItem('pulsedirect_custom_gemini_key') ||
+        '';
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -1877,6 +1898,7 @@ export default function App() {
         hasServerAi={hasServerAi}
         onRefreshServerStatus={refreshServerAiStatus}
         onOpenCaiImportModal={() => setIsCaiImportModalOpen(true)}
+        onClearApiError={() => setApiErrorBanner(null)}
         chats={burnerMode ? burnerChats : chats}
         charMemories={charMemories}
         onRefreshMemories={() => {
