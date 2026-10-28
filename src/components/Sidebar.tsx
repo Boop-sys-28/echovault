@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Character, Message, UserProfile, DynamicGroupRoom } from '../types';
 import { resolveAvatarUrl, handleAvatarImageError, formatCompactNumber } from '../utils/avatarHelper';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
   characters: Character[];
@@ -473,6 +474,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             No conversations matching "{searchQuery}"
           </div>
         )}
+      </div>
+
+      {/* PWA In-App Install Prompt */}
+      <div className="px-3 pb-2 pt-1 border-t border-white/5">
+        <PWAInstallButton variant="sidebar" />
       </div>
 
       {/* User Status Footer with Safe-Area Inset */}

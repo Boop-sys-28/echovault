@@ -140,7 +140,59 @@ export function calculateBubbleTypingDelayMs(charId: string, bubbleText: string)
 }
 
 /**
- * Splits a multi-part response (`||` separated or multi-line) into 1 to 3 clean bubbles
+ * Calculates a typing delay for a bubble in a multi-bubble (`||`) sequence.
+ * Enforces a snappy inter-bubble delay strictly capped at 300ms–500ms maximum
+ * so character responses appear much faster without long pauses.
+ */
+export function calculateInterBubbleTypingDelayMs(
+  charId: string,
+  bubbleText: string,
+  bubbleIndex: number,
+  alreadyWaitedMs: number = 0
+): number {
+  const preset = getGlobalTypingSpeedPreset();
+  if (preset === 'instant') {
+    return bubbleIndex === 0 ? 300 : 350;
+  }
+
+  if (bubbleIndex === 0) {
+    const fullDelay = calculateBubbleTypingDelayMs(charId, bubbleText);
+    const remaining = fullDelay - alreadyWaitedMs;
+    // Cap initial bubble delay to 300ms–450ms for snappy start
+    return Math.min(450, Math.max(300, remaining));
+  }
+
+  // Subsequent bubbles (index >= 1): strictly capped to 300ms–500ms maximum
+  const charsPerSec = preset === 'fast' ? 45 : preset === 'slow' || preset === 'cinematic' ? 25 : 35;
+  const scaledDelay = Math.round((bubbleText.length / charsPerSec) * 50) + 300;
+  // Strictly enforce range between 300ms and 500ms
+  return Math.min(500, Math.max(300, scaledDelay));
+}
+
+/**
+ * Returns a fresh timestamp (in ms) for an individual bubble as it appears,
+ * guaranteeing it is strictly separated from the previous bubble's timestamp by at least 1 second.
+ */
+export function getUniqueSequentialTimestamp(previousTimestampMs: number = 0): number {
+  const now = Date.now();
+  return now <= previousTimestampMs ? previousTimestampMs + 1000 : now;
+}
+
+/**
+ * Formats a bubble timestamp with hours, minutes, and seconds so sequential bubbles
+ * arriving seconds apart display their own distinct timestamps.
+ */
+export function formatBubbleTimestamp(ts: number = Date.now()): string {
+  return new Date(ts).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
+/**
+ * Splits a multi-part response (`||` separated or multi-line) into clean individual bubbles
  * while preserving expressive Character.AI-style roleplay actions in asterisks (*...*).
  */
 export function splitResponseIntoBubbles(rawText: string): string[] {
@@ -150,7 +202,7 @@ export function splitResponseIntoBubbles(rawText: string): string[] {
   let parts: string[];
   if (cleaned.includes('||')) {
     parts = cleaned
-      .split('||')
+      .split(/\s*\|\|\s*/)
       .map(s => s.trim())
       .filter(Boolean);
   } else if (cleaned.includes('\n\n')) {
@@ -162,7 +214,70 @@ export function splitResponseIntoBubbles(rawText: string): string[] {
     parts = [cleaned];
   }
 
-  return parts.slice(0, 3);
+  return parts.slice(0, 4);
+}
+
+export interface SequentialBubbleCallbacks {
+  onTypingChange: (isTyping: boolean) => void;
+  onDeliverBubble: (
+    bubbleText: string,
+    index: number,
+    timestampMs: number,
+    isLastBubble: boolean
+  ) => void;
+  shouldCancel?: () => boolean;
+}
+
+/**
+ * Orchestrates sequential delivery of multi-bubble (`||`) responses with realistic
+ * per-bubble typing delays and a fresh, separate timestamp assigned as each bubble renders.
+ */
+export function orchestrateSequentialBubbles(
+  charId: string,
+  rawReplyText: string,
+  callbacks: SequentialBubbleCallbacks,
+  options?: { alreadyWaitedMs?: number }
+): void {
+  const bubbles = splitResponseIntoBubbles(rawReplyText);
+  if (bubbles.length === 0) {
+    callbacks.onTypingChange(false);
+    return;
+  }
+
+  let lastBubbleTs = 0;
+
+  const runStep = (index: number) => {
+    if (callbacks.shouldCancel?.()) return;
+
+    const bubbleText = bubbles[index];
+    const delayMs = calculateInterBubbleTypingDelayMs(
+      charId,
+      bubbleText,
+      index,
+      index === 0 ? options?.alreadyWaitedMs || 0 : 0
+    );
+
+    callbacks.onTypingChange(true);
+
+    setTimeout(() => {
+      if (callbacks.shouldCancel?.()) return;
+
+      const bubbleTs = getUniqueSequentialTimestamp(lastBubbleTs);
+      lastBubbleTs = bubbleTs;
+      const isLast = index + 1 >= bubbles.length;
+
+      callbacks.onDeliverBubble(bubbleText, index, bubbleTs, isLast);
+
+      if (!isLast) {
+        callbacks.onTypingChange(true);
+        runStep(index + 1);
+      } else {
+        callbacks.onTypingChange(false);
+      }
+    }, delayMs);
+  };
+
+  runStep(0);
 }
 
 /**

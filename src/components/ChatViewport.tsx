@@ -37,6 +37,15 @@ import {
 } from '../types';
 import { THEME_DEFINITIONS } from '../data/themes';
 import { resolveAvatarUrl, handleAvatarImageError, formatCompactNumber } from '../utils/avatarHelper';
+import {
+  formatBubbleTimestamp,
+  splitResponseIntoBubbles,
+} from '../utils/semanticOrchestrator';
+import {
+  getMergedCharacterMemories,
+  extractFactsFromUserMessage,
+  addCharacterMemory,
+} from '../utils/memory';
 
 interface ChatViewportProps {
   character?: Character;
@@ -67,6 +76,7 @@ interface ChatViewportProps {
   isFollowed?: boolean;
   isStoryViewed?: boolean;
   memoriesCount?: number;
+  activeMemories?: string[];
   onOpenMemoryVault?: () => void;
   onOpenSharePhoto?: () => void;
   onImageClick?: (url: string, caption?: string, senderName?: string) => void;
@@ -76,7 +86,7 @@ interface ChatViewportProps {
   onToggleAutoAway: () => void;
   onTriggerAwayMessage: () => void;
   onInputChange: (val: string) => void;
-  onSubmit: (e: React.FormEvent) => void;
+  onSubmit: (e: React.FormEvent, memoriesFromViewport?: string[]) => void;
   onToggleBurner: () => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onRequestPhoto: () => void;
@@ -131,6 +141,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   isFollowed = true,
   isStoryViewed = false,
   memoriesCount = 0,
+  activeMemories = [],
   onOpenMemoryVault,
   onOpenSharePhoto,
   onImageClick,
@@ -456,12 +467,28 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   }
 
   const formatTime = (ts: number) => {
-    return new Date(ts).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
+    return formatBubbleTimestamp(ts);
   };
+
+  // Ensure any message containing `||` is split into individual bubbles with separate, increasing timestamps
+  const renderedMessages: Message[] = [];
+  let lastRenderedTs = 0;
+  for (const msg of messages) {
+    const parts = msg.text.includes('||') ? splitResponseIntoBubbles(msg.text) : [msg.text];
+    parts.forEach((partText, partIdx) => {
+      const rawTs = partIdx === 0 ? msg.timestamp : msg.timestamp + partIdx * 2000;
+      const distinctTs = rawTs <= lastRenderedTs ? lastRenderedTs + 1500 : rawTs;
+      lastRenderedTs = distinctTs;
+      renderedMessages.push({
+        ...msg,
+        id: partIdx === 0 ? msg.id : `${msg.id}-part-${partIdx}`,
+        text: partText,
+        image: partIdx === 0 ? msg.image : undefined,
+        replyTo: partIdx === 0 ? msg.replyTo : undefined,
+        timestamp: distinctTs,
+      });
+    });
+  }
 
   const handleAvatarClick = () => {
     if (!character.storyImg) return;
@@ -850,7 +877,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
           </div>
         )}
 
-        {messages.map((msg) => {
+        {renderedMessages.map((msg) => {
           const isUser = msg.sender === 'user';
           const isHighlighted = highlightedMsgId === msg.id;
 
@@ -1043,7 +1070,19 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
           </div>
         )}
 
-        <form onSubmit={onSubmit} className="flex items-center gap-2">
+        <form
+          onSubmit={(e) => {
+            if (character && inputText.trim()) {
+              const extracted = extractFactsFromUserMessage(inputText, userCodename);
+              extracted.forEach((f) => addCharacterMemory(character.id, f));
+              const latestMemories = getMergedCharacterMemories(character.id, activeMemories);
+              onSubmit(e, latestMemories);
+            } else {
+              onSubmit(e, activeMemories);
+            }
+          }}
+          className="flex items-center gap-2"
+        >
           {/* Request Photo Button */}
           <button
             type="button"

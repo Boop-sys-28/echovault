@@ -15,6 +15,7 @@ import { MemoryVaultModal } from './components/MemoryVaultModal';
 import { CaiImportModal } from './components/CaiImportModal';
 import { ScoreBreakdownModal } from './components/ScoreBreakdownModal';
 import { UnifiedSettingsModal, SettingsTabId } from './components/UnifiedSettingsModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 import {
   DEFAULT_CHARACTERS,
@@ -46,6 +47,9 @@ import {
 } from './utils/audio';
 import {
   getCharacterMemories,
+  getMergedCharacterMemories,
+  buildMemoryPromptBlock,
+  getAllCharactersMemories,
   addCharacterMemory,
   removeCharacterMemory,
   clearCharacterMemories,
@@ -57,8 +61,8 @@ import {
   getCharacterDirective,
 } from './utils/responseDirector';
 import {
-  calculateBubbleTypingDelayMs,
-  splitResponseIntoBubbles,
+  formatBubbleTimestamp,
+  orchestrateSequentialBubbles,
 } from './utils/semanticOrchestrator';
 import { resolveAvatarUrl } from './utils/avatarHelper';
 import {
@@ -413,8 +417,14 @@ export default function App() {
     return [];
   });
 
-  // Character Memories State
-  const [charMemories, setCharMemories] = useState<Record<string, string[]>>({});
+  // Character Memories State (initialized from localStorage across all characters)
+  const [charMemories, setCharMemories] = useState<Record<string, string[]>>(() => {
+    try {
+      return getAllCharactersMemories(DEFAULT_CHARACTERS.map(c => c.id));
+    } catch {
+      return {};
+    }
+  });
 
   // Modals & Overlays
   const [storyCharId, setStoryCharId] = useState<string | null>(null);
@@ -752,8 +762,13 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const defaultKey = 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
-      if (!localStorage.getItem('custom_gemini_api_key')) {
+      const defaultKey = 'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
+      const current = localStorage.getItem('custom_gemini_api_key');
+      if (
+        !current ||
+        current === 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA' ||
+        current === 'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w'
+      ) {
         localStorage.setItem('custom_gemini_api_key', defaultKey);
         localStorage.setItem('pulsedirect_custom_gemini_key', defaultKey);
       }
@@ -859,9 +874,9 @@ export default function App() {
   };
 
   /**
-   * Delivers one or more character response bubbles sequentially using the character's
-   * personality-based typing speed profile (1-2s fast, 3-4s moderate, 5-7s slow).
-   * Keeps the active typing indicator visible between bubbles until the final line is sent.
+   * Delivers one or more character response bubbles sequentially using the semantic
+   * bubble orchestrator and character's typing speed profile.
+   * Assigns an updated, separate timestamp to each individual bubble as it appears.
    */
   const deliverCharacterBubblesSequentially = (
     char: Character,
@@ -873,84 +888,60 @@ export default function App() {
       markUnreadIfAway?: boolean;
     }
   ) => {
-    const bubbles = splitResponseIntoBubbles(rawReplyText);
-    if (bubbles.length === 0) {
-      setIsTyping(false);
-      return;
-    }
-
     const sequenceId = ++typingSequenceCancelRef.current;
 
-    const runBubbleStep = (index: number) => {
-      if (typingSequenceCancelRef.current !== sequenceId) return;
+    orchestrateSequentialBubbles(
+      char.id,
+      rawReplyText,
+      {
+        shouldCancel: () => typingSequenceCancelRef.current !== sequenceId,
+        onTypingChange: (typing) => setIsTyping(typing),
+        onDeliverBubble: (bubbleText, index, bubbleTimestampMs) => {
+          playMessageReceivedSound();
 
-      const bubbleText = bubbles[index];
-      const fullDelay = calculateBubbleTypingDelayMs(char.id, bubbleText);
-      const effectiveDelay =
-        index === 0
-          ? Math.min(
-              1400,
-              options?.alreadyWaitedMs
-                ? Math.max(350, fullDelay - options.alreadyWaitedMs)
-                : fullDelay
-            )
-          : Math.min(1600, Math.max(700, Math.round(fullDelay * 0.45)));
+          const charMsg: Message = {
+            id: `char-${bubbleTimestampMs}-${index}-${Math.random().toString(36).substring(2, 6)}`,
+            sender: 'char',
+            text: bubbleText,
+            image: index === 0 ? options?.photoUrl : undefined,
+            timestamp: bubbleTimestampMs,
+            replyTo: index === 0 ? options?.replyTo : undefined,
+          };
 
-      setIsTyping(true);
+          if (burnerMode) {
+            setBurnerChats(prev => ({
+              ...prev,
+              [char.id]: [...(prev[char.id] || []), charMsg],
+            }));
+          } else {
+            setChats(prev => ({
+              ...prev,
+              [char.id]: [...(prev[char.id] || []), charMsg],
+            }));
+          }
 
-      setTimeout(() => {
-        if (typingSequenceCancelRef.current !== sequenceId) return;
-
-        playMessageReceivedSound();
-
-        const charMsg: Message = {
-          id: `char-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 6)}`,
-          sender: 'char',
-          text: bubbleText,
-          image: index === 0 ? options?.photoUrl : undefined,
-          timestamp: Date.now(),
-          replyTo: index === 0 ? options?.replyTo : undefined,
-        };
-
-        if (burnerMode) {
-          setBurnerChats(prev => ({
-            ...prev,
-            [char.id]: [...(prev[char.id] || []), charMsg],
-          }));
-        } else {
-          setChats(prev => ({
-            ...prev,
-            [char.id]: [...(prev[char.id] || []), charMsg],
-          }));
-        }
-
-        if (
-          options?.markUnreadIfAway &&
-          (char.id !== activeCharId || document.visibilityState === 'hidden' || isAwayRef.current)
-        ) {
-          setUnreadCounts(prev => ({
-            ...prev,
-            [char.id]: (prev[char.id] || 0) + 1,
-          }));
-          document.title = `(1) ${char.name}: "${bubbleText.slice(0, 24)}..."`;
-        }
-
-        if (index + 1 < bubbles.length) {
-          runBubbleStep(index + 1);
-        } else {
-          setIsTyping(false);
-        }
-      }, effectiveDelay);
-    };
-
-    runBubbleStep(0);
+          if (
+            options?.markUnreadIfAway &&
+            (char.id !== activeCharId || document.visibilityState === 'hidden' || isAwayRef.current)
+          ) {
+            setUnreadCounts(prev => ({
+              ...prev,
+              [char.id]: (prev[char.id] || 0) + 1,
+            }));
+            document.title = `(1) ${char.name}: "${bubbleText.slice(0, 24)}..."`;
+          }
+        },
+      },
+      { alreadyWaitedMs: options?.alreadyWaitedMs }
+    );
   };
 
   /**
    * Builds the full character system instruction combining `system`, `systemInstruction`,
-   * live relationship score/tier context, and Response Director overrides.
+   * live relationship score/tier context, Response Director overrides, AND all extracted
+   * episodic memories from MemoryVaultModal / localStorage for the character.
    */
-  const buildFullCharacterSystemPrompt = (char: Character): string => {
+  const buildFullCharacterSystemPrompt = (char: Character, explicitMemories?: string[]): string => {
     const directive = getCharacterDirective(char.id);
     const primarySystem = directive.systemOverride || char.system || char.systemInstruction || '';
     const extraSystem =
@@ -966,7 +957,56 @@ export default function App() {
 - Current Affinity Score: ${currentAffinity} / 100 (Tier: ${currentTier}).
 - Baseline started at 0 (Stranger). Respond authentically according to this ${currentTier} relationship tier and your canon personality.`;
     const directiveBlock = buildDirectivePromptBlock(char.id);
-    return `${primarySystem}${extraSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${directiveBlock}`;
+    const memoryVaultBlock = buildMemoryPromptBlock(
+      char.id,
+      explicitMemories ?? charMemories[char.id]
+    );
+    return `${primarySystem}${extraSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${memoryVaultBlock}${directiveBlock}`;
+  };
+
+  /**
+   * Helper that posts to /api/chat with automatic client-side exponential backoff retry
+   * on transient 429 / 502 / 503 / network errors.
+   */
+  const postChatWithBackoff = async (
+    payload: Record<string, unknown>,
+    customKey: string,
+    maxRetries: number = 2
+  ): Promise<{ ok: boolean; status: number; data: any }> => {
+    let lastStatus = 500;
+    let lastData: any = {};
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delayMs = Math.min(4000, 750 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 250));
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(customKey ? { 'x-gemini-api-key': customKey } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        lastStatus = res.status;
+        lastData = data;
+
+        if (res.ok && data?.text && String(data.text).trim()) {
+          return { ok: true, status: res.status, data };
+        }
+        // Do not retry on invalid API key (401)
+        if (res.status === 401 || data?.error === 'INVALID_KEY') {
+          return { ok: false, status: res.status, data };
+        }
+      } catch (err) {
+        lastData = { error: 'NETWORK_ERROR', message: String(err) };
+      }
+    }
+
+    return { ok: false, status: lastStatus, data: lastData };
   };
 
   // Inbound spontaneous message (enforces strict 3–4 hour cooldown unless manually simulated)
@@ -1013,26 +1053,21 @@ export default function App() {
         localStorage.getItem('pulsedirect_custom_gemini_key') ||
         '';
 
-      const memories = charMemories[char.id] || getCharacterMemories(char.id);
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
-        },
-        body: JSON.stringify({
+      const memories = getMergedCharacterMemories(char.id, charMemories[char.id]);
+      const { ok, data } = await postChatWithBackoff(
+        {
           prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${currentUser?.codename || 'them'}. Send a spontaneous, natural check-in text or share something new happening on your end in your canon voice (current relationship/affinity level: ${currentRelLevel} - ${getRelationshipTierFromAffinity(currentRelLevel)}). Max 2 short bubbles separated by ' || '.`,
-          systemInstruction: buildFullCharacterSystemPrompt(char),
+          systemInstruction: buildFullCharacterSystemPrompt(char, memories),
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
-        }),
-      });
+        },
+        customStoredKey
+      );
 
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.text && String(data.text).trim()) {
+      if (ok && data.text && String(data.text).trim()) {
         replyText = String(data.text).trim();
         setApiErrorBanner(null);
         if (!hasServerAi) setHasServerAi(true);
@@ -1147,6 +1182,12 @@ export default function App() {
   const handleSelectCharacter = (id: string) => {
     setActiveGroupRoomId('');
     setActiveCharId(id);
+    // Sync memories from localStorage for this character
+    const storedMemories = getCharacterMemories(id);
+    setCharMemories(prev => ({
+      ...prev,
+      [id]: getMergedCharacterMemories(id, prev[id] || storedMemories),
+    }));
     if (!activeConversationIds.includes(id)) {
       setActiveConversationIds(prev => [id, ...prev]);
       incrementOperativeUserCount(id);
@@ -1216,20 +1257,21 @@ export default function App() {
       return;
     }
 
+    const requestStart = Date.now();
     try {
       const customStoredKey =
         localStorage.getItem('custom_gemini_api_key') ||
         localStorage.getItem('pulsedirect_custom_gemini_key') ||
         '';
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
-        },
-        body: JSON.stringify({
+      const responderMemories = getMergedCharacterMemories(
+        responderChar.id,
+        charMemories[responderChar.id]
+      );
+      const { ok, data } = await postChatWithBackoff(
+        {
           prompt: `[GROUP CHANNEL "${activeGroupRoom.name}"]: ${currentUser?.codename || 'Operative_07'} just said to the group: "${text.trim()}". Reply in-character as ${responderChar.name} in 1-2 short bubbles separated by ' || '.`,
-          systemInstruction: buildFullCharacterSystemPrompt(responderChar),
+          systemInstruction: buildFullCharacterSystemPrompt(responderChar, responderMemories),
+          memories: responderMemories.slice(0, 75),
           history: currentRoomHistory
             .filter(m => !m.isSystemDivider)
             .slice(-20)
@@ -1237,35 +1279,49 @@ export default function App() {
               role: m.senderId === 'user' ? 'user' : 'model',
               text: `${m.senderName}: ${m.text}`,
             })),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      setIsTyping(false);
+        },
+        customStoredKey
+      );
 
-      if (res.ok && data.text) {
-        const replyBubbles = splitResponseIntoBubbles(String(data.text));
-        if (replyBubbles.length > 0) {
-          playMessageReceivedSound();
-          const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-          const botMsgs: BacklogMessage[] = replyBubbles.map((bText, idx) => ({
-            id: `${activeGroupRoom.id}-b-${Date.now()}-${idx}`,
-            senderId: responderChar.id,
-            senderName: responderChar.name,
-            avatarUrl: responderChar.avatarUrl || responderChar.avatar,
-            text: bText,
-            timestamp: nowTimeStr,
-          }));
-          const updatedList = [...currentRoomHistory, ...botMsgs];
-          setGroupRoomMessages(prev => ({
-            ...prev,
-            [activeGroupRoom.id]: updatedList,
-          }));
-          try {
-            localStorage.setItem(`pulsedirect_messages_${activeGroupRoom.id}`, JSON.stringify(updatedList));
-          } catch {
-            // ignore
-          }
-        }
+      if (ok && data.text) {
+        const roomId = activeGroupRoom.id;
+        const sequenceId = ++typingSequenceCancelRef.current;
+        const elapsedMs = Date.now() - requestStart;
+
+        orchestrateSequentialBubbles(
+          responderChar.id,
+          String(data.text),
+          {
+            shouldCancel: () => typingSequenceCancelRef.current !== sequenceId,
+            onTypingChange: (typing) => setIsTyping(typing),
+            onDeliverBubble: (bubbleText, idx, bubbleTs) => {
+              playMessageReceivedSound();
+              const botMsg: BacklogMessage = {
+                id: `${roomId}-b-${bubbleTs}-${idx}`,
+                senderId: responderChar.id,
+                senderName: responderChar.name,
+                avatarUrl: responderChar.avatarUrl || responderChar.avatar,
+                text: bubbleText,
+                timestamp: formatBubbleTimestamp(bubbleTs),
+              };
+              setGroupRoomMessages(prev => {
+                const updatedList = [...(prev[roomId] || currentRoomHistory), botMsg];
+                try {
+                  localStorage.setItem(`pulsedirect_messages_${roomId}`, JSON.stringify(updatedList));
+                } catch {
+                  // ignore
+                }
+                return {
+                  ...prev,
+                  [roomId]: updatedList,
+                };
+              });
+            },
+          },
+          { alreadyWaitedMs: elapsedMs }
+        );
+      } else {
+        setIsTyping(false);
       }
     } catch {
       setIsTyping(false);
@@ -1273,7 +1329,11 @@ export default function App() {
   };
 
   // Submit User Message with Spontaneous Context-Driven AI Generation & Sequential Typing
-  const handleSendMessage = async (text: string, isRetry: boolean = false) => {
+  const handleSendMessage = async (
+    text: string,
+    isRetry: boolean = false,
+    viewportMemories?: string[]
+  ) => {
     if (!text.trim() || !activeChar) return;
 
     lastActivityRef.current = Date.now();
@@ -1290,6 +1350,15 @@ export default function App() {
     };
 
     const existingChatList = (burnerMode ? burnerChats[activeChar.id] : chats[activeChar.id]) || [];
+
+    // Ensure any facts from past user messages in this conversation are also indexed in localStorage
+    existingChatList
+      .filter(m => m.sender === 'user' && m.text)
+      .slice(-20)
+      .forEach(m => {
+        const pastFacts = extractFactsFromUserMessage(m.text, currentUser?.codename);
+        pastFacts.forEach(pf => addCharacterMemory(activeChar.id, pf));
+      });
 
     if (!isRetry) {
       playMessageSentSound();
@@ -1318,15 +1387,21 @@ export default function App() {
         negHits: turnEval.negHits,
       });
 
-      // 3. Automatically extract user facts into character's memory bank
-      const newFacts = extractFactsFromUserMessage(text);
+      // 3. Automatically extract user facts into character's memory bank synchronously BEFORE building systemInstruction
+      const newFacts = extractFactsFromUserMessage(text, currentUser?.codename);
       if (newFacts.length > 0) {
         newFacts.forEach(f => {
-          const updated = addCharacterMemory(activeChar.id, f);
-          setCharMemories(prev => ({ ...prev, [activeChar.id]: updated }));
+          addCharacterMemory(activeChar.id, f);
         });
       }
     }
+
+    // Retrieve all merged memories from MemoryVaultModal state + localStorage for activeChar
+    const activeMemories = getMergedCharacterMemories(activeChar.id, [
+      ...(viewportMemories || []),
+      ...(charMemories[activeChar.id] || []),
+    ]);
+    setCharMemories(prev => ({ ...prev, [activeChar.id]: activeMemories }));
 
     setIsTyping(true);
     setApiErrorBanner(null);
@@ -1347,7 +1422,6 @@ export default function App() {
       existingChatList[existingChatList.length - 1].text === text.trim()
         ? existingChatList.slice(0, -1)
         : existingChatList;
-    const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
 
     let replyText = '';
 
@@ -1362,25 +1436,26 @@ export default function App() {
         localStorage.getItem('pulsedirect_custom_gemini_key') ||
         '';
 
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
-        },
-        body: JSON.stringify({
+      // Build systemInstruction with all extracted memories injected directly inside it
+      const systemInstructionWithMemories = buildFullCharacterSystemPrompt(
+        activeChar,
+        activeMemories
+      );
+
+      const { ok, data } = await postChatWithBackoff(
+        {
           prompt: promptPayload,
-          systemInstruction: buildFullCharacterSystemPrompt(activeChar),
-          memories: memories.slice(0, 75),
+          systemInstruction: systemInstructionWithMemories,
+          memories: activeMemories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
-        }),
-      });
+        },
+        customStoredKey
+      );
 
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.text && String(data.text).trim()) {
+      if (ok && data.text && String(data.text).trim()) {
         replyText = String(data.text).trim();
         setApiErrorBanner(null);
         setLastFailedMessageText(null);
@@ -1493,32 +1568,27 @@ export default function App() {
     let replyText = '';
 
     try {
-      const memories = charMemories[activeChar.id] || getCharacterMemories(activeChar.id);
+      const memories = getMergedCharacterMemories(activeChar.id, charMemories[activeChar.id]);
       const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"`;
       const customStoredKey =
         localStorage.getItem('custom_gemini_api_key') ||
         localStorage.getItem('pulsedirect_custom_gemini_key') ||
         '';
 
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(customStoredKey ? { 'x-gemini-api-key': customStoredKey } : {}),
-        },
-        body: JSON.stringify({
+      const { ok, data } = await postChatWithBackoff(
+        {
           prompt: promptPayload,
-          systemInstruction: buildFullCharacterSystemPrompt(activeChar),
+          systemInstruction: buildFullCharacterSystemPrompt(activeChar, memories),
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
-        }),
-      });
+        },
+        customStoredKey
+      );
 
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.text && String(data.text).trim()) {
+      if (ok && data.text && String(data.text).trim()) {
         replyText = String(data.text).trim();
         setApiErrorBanner(null);
         if (!hasServerAi) setHasServerAi(true);
@@ -1787,7 +1857,10 @@ export default function App() {
   }
 
   return (
-    <div className={`h-[100dvh] w-screen flex overflow-hidden ${activeTheme.palette.bgApp} text-slate-100 font-sans select-none`}>
+    <div className={`h-[100dvh] w-screen flex overflow-hidden ${activeTheme.palette.bgApp} text-slate-100 font-sans select-none relative`}>
+      {/* PWA Network Connectivity & Offline Mode Indicator */}
+      <OfflineIndicator />
+
       {/* 1. Stealth Scientific Calculator Disguise Overlay */}
       <StealthCalculator
         isOpen={isStealth}
@@ -1923,7 +1996,7 @@ export default function App() {
       {memoryVaultOpen && activeChar && (
         <MemoryVaultModal
           character={activeChar}
-          memories={charMemories[activeChar.id] || getCharacterMemories(activeChar.id)}
+          memories={getMergedCharacterMemories(activeChar.id, charMemories[activeChar.id])}
           onAddMemory={(fact) => {
             const updated = addCharacterMemory(activeChar.id, fact);
             setCharMemories(prev => ({ ...prev, [activeChar.id]: updated }));
@@ -2059,7 +2132,16 @@ export default function App() {
         onDeleteMessage={(msgId) => activeChar && handleDeleteMessage(activeChar.id, msgId)}
         isFollowed={activeChar ? followedCharIds.includes(activeChar.id) : true}
         isStoryViewed={activeChar ? viewedStoryIds.includes(activeChar.id) : false}
-        memoriesCount={activeChar ? (charMemories[activeChar.id] || getCharacterMemories(activeChar.id)).length : 0}
+        memoriesCount={
+          activeChar
+            ? getMergedCharacterMemories(activeChar.id, charMemories[activeChar.id]).length
+            : 0
+        }
+        activeMemories={
+          activeChar
+            ? getMergedCharacterMemories(activeChar.id, charMemories[activeChar.id])
+            : []
+        }
         onOpenMemoryVault={() => setMemoryVaultOpen(true)}
         onOpenSharePhoto={() => setSharePhotoModalOpen(true)}
         onImageClick={(url, caption, senderName) => setLightboxData({ url, caption, senderName })}
@@ -2069,9 +2151,9 @@ export default function App() {
         onToggleAutoAway={() => setAutoAwayEnabled(prev => !prev)}
         onTriggerAwayMessage={() => triggerInboundAwayMessage(undefined, true)}
         onInputChange={setInputText}
-        onSubmit={(e) => {
+        onSubmit={(e, memoriesFromViewport) => {
           e.preventDefault();
-          handleSendMessage(inputText);
+          handleSendMessage(inputText, false, memoriesFromViewport);
         }}
         onToggleBurner={handleToggleBurner}
         onStartCall={handleStartCall}

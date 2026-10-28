@@ -60,6 +60,7 @@ import {
   clearAllCharactersMemories,
   MAX_ACTIVE_MEMORIES,
 } from '../utils/memory';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type SettingsTabId =
   | 'account'
@@ -182,13 +183,19 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
 
   // --- Tab 4: AI Engine & Intelligence State ---
   const DEFAULT_USER_GEMINI_KEY =
-    'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA';
+    'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
   const [customApiKey, setCustomApiKey] = useState<string>(() => {
     try {
       const saved =
         localStorage.getItem('custom_gemini_api_key') ??
         localStorage.getItem('pulsedirect_custom_gemini_key');
-      if (saved !== null) return saved;
+      if (
+        saved !== null &&
+        saved !== 'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA' &&
+        saved !== 'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w'
+      ) {
+        return saved;
+      }
       localStorage.setItem('custom_gemini_api_key', DEFAULT_USER_GEMINI_KEY);
       localStorage.setItem('pulsedirect_custom_gemini_key', DEFAULT_USER_GEMINI_KEY);
       return DEFAULT_USER_GEMINI_KEY;
@@ -690,6 +697,9 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                     <span>Log Out</span>
                   </button>
                 </div>
+
+                {/* Progressive Web App Install Option */}
+                <PWAInstallButton variant="full" />
 
                 {/* Edit Profile & Quick PIN Form */}
                 <form onSubmit={handleSaveProfile} className="p-4 sm:p-5 rounded-2xl bg-white/[0.02] border border-white/10 space-y-4">

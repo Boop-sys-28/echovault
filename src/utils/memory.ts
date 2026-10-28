@@ -18,24 +18,73 @@ function isInternalSystemFact(fact: string): boolean {
 }
 
 export function getCharacterMemories(charId: string): string[] {
+  if (!charId) return [];
   try {
-    const raw = localStorage.getItem(`${STORAGE_PREFIX}${charId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const list: string[] = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed?.facts)
-        ? parsed.facts
-        : [];
-      return list
-        .map(f => String(f).trim())
-        .filter(f => f.length > 0 && !isInternalSystemFact(f))
-        .slice(0, MAX_ACTIVE_MEMORIES);
+    const candidateKeys = [
+      `${STORAGE_PREFIX}${charId}`,
+      `character_memories_${charId}`,
+      `memories_${charId}`,
+      `cai_memories_${charId}`,
+    ];
+    const combined: string[] = [];
+
+    for (const key of candidateKeys) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        const list: unknown[] = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.facts)
+          ? parsed.facts
+          : Array.isArray(parsed?.memories)
+          ? parsed.memories
+          : [];
+        for (const item of list) {
+          const str = typeof item === 'string' ? item.trim() : String((item as any)?.fact || (item as any)?.text || '').trim();
+          if (str.length > 0 && !isInternalSystemFact(str)) {
+            combined.push(str);
+          }
+        }
+      } catch {
+        // ignore malformed entry
+      }
     }
+
+    return Array.from(new Set(combined)).slice(0, MAX_ACTIVE_MEMORIES);
   } catch {
     // ignore storage errors
   }
   return [];
+}
+
+export function getMergedCharacterMemories(charId: string, stateMemories?: string[]): string[] {
+  const stored = getCharacterMemories(charId);
+  const merged: string[] = [];
+  const seenLower = new Set<string>();
+
+  for (const item of [...(stateMemories || []), ...stored]) {
+    const trimmed = String(item || '').trim();
+    if (!trimmed || isInternalSystemFact(trimmed)) continue;
+    const lower = trimmed.toLowerCase();
+    if (!seenLower.has(lower)) {
+      seenLower.add(lower);
+      merged.push(trimmed);
+    }
+  }
+
+  return merged.slice(0, MAX_ACTIVE_MEMORIES);
+}
+
+/**
+ * Builds the episodic memory block to be injected directly into the character's systemInstruction.
+ */
+export function buildMemoryPromptBlock(charId: string, stateMemories?: string[]): string {
+  const memories = getMergedCharacterMemories(charId, stateMemories);
+  if (memories.length === 0) return '';
+  return `\n\n[CHARACTER.AI EPISODIC MEMORY VAULT — ACTIVE RECALL FOR THIS USER]:
+You actively remember the following ${memories.length} key facts, personal details, preferences, and shared history about the user from your Memory Vault and conversation history. Keep these facts in mind and weave them naturally into your replies whenever relevant (or when the user asks what you remember about them):
+${memories.map((m, idx) => `${idx + 1}. ${m}`).join('\n')}`;
 }
 
 export function saveCharacterMemories(charId: string, facts: string[]): void {
@@ -114,16 +163,25 @@ export function clearAllCharactersMemories(charIds: string[]): void {
 
 /**
  * Intelligent client-side fact extraction from user messages.
- * Notes down genuine user-stated facts (names, pets, favorite foods, hobbies)
+ * Notes down genuine user-stated facts (names, pets, favorite foods, hobbies, work, location, memories)
  * without ever injecting internal system handles or metadata strings.
  */
 export function extractFactsFromUserMessage(text: string, _userCodename?: string): string[] {
   const extracted: string[] = [];
   const clean = text.trim();
+  if (!clean) return extracted;
   const lower = clean.toLowerCase();
 
-  // Explicit name introduction by user in chat
-  const nameMatch = clean.match(/(?:my name is|call me)\s+([A-Za-z0-9_-]{2,20})/i);
+  // 1. Explicit "remember that..." or "don't forget..." requests
+  const rememberMatch = clean.match(
+    /(?:remember that|don't forget that|dont forget that|keep in mind that|please remember)\s+([^.!?]{4,100})/i
+  );
+  if (rememberMatch && rememberMatch[1]) {
+    extracted.push(`User noted: ${rememberMatch[1].trim()}`);
+  }
+
+  // 2. Explicit name introduction by user in chat
+  const nameMatch = clean.match(/(?:my name is|call me|i'm called|i am called)\s+([A-Za-z0-9_-]{2,22})/i);
   if (
     nameMatch &&
     ![
@@ -139,49 +197,118 @@ export function extractFactsFromUserMessage(text: string, _userCodename?: string
       'eating',
       'late',
       'ready',
+      'sorry',
+      'just',
+      'really',
+      'very',
+      'so',
     ].includes(nameMatch[1].toLowerCase())
   ) {
     extracted.push(`Preferred name is ${nameMatch[1]}`);
   }
 
-  // Favorites & Food
-  const foodMatch = lower.match(
-    /(?:i love|i like|i really like|craving|eating|my favorite food is|my favorite drink is)\s+(ramen|coffee|crepes|sweets|mochi|sushi|pizza|tea|boba|chocolate|ice cream|burgers|tacos|pasta|matcha)/i
-  );
-  if (foodMatch && foodMatch[1]) {
-    extracted.push(`Likes ${foodMatch[1]}`);
+  // 3. Explicit favorite things ("my favorite X is Y")
+  const favExplicit = clean.match(/my favorite\s+([a-zA-Z\s]{2,20})\s+is\s+([^.,!?]{2,45})/i);
+  if (favExplicit && favExplicit[1] && favExplicit[2]) {
+    extracted.push(`Favorite ${favExplicit[1].trim().toLowerCase()} is ${favExplicit[2].trim()}`);
   }
 
-  // Pets & Animals
-  const petMatch = clean.match(
-    /(?:i have a|got a|my)\s+(cat|dog|puppy|kitten|bird|bunny|pet)(?:\s+named\s+([A-Za-z0-9_-]+))?/i
+  // 4. General likes / loves / cravings / drinks / music
+  const foodOrLikeMatch = clean.match(
+    /(?:i love|i really like|craving|drinking|eating|listening to|watching)\s+([A-Za-z0-9\s'-]{2,35}?)(?=[.,!?]|$|\s+(?:and|right now|today|tonight|because|while|with))/i
   );
-  if (petMatch) {
-    if (petMatch[2]) {
-      extracted.push(`Has a ${petMatch[1]} named ${petMatch[2]}`);
-    } else {
-      extracted.push(`Has a ${petMatch[1]}`);
+  if (foodOrLikeMatch && foodOrLikeMatch[1]) {
+    const item = foodOrLikeMatch[1].trim();
+    if (
+      item.length >= 3 &&
+      !['you', 'this', 'that', 'it', 'him', 'her', 'them', 'nothing', 'something'].includes(item.toLowerCase())
+    ) {
+      extracted.push(`Enjoys/mentioned ${item}`);
     }
   }
 
-  // Sleep habits & Work
+  // 5. Dislikes, fears, & allergies
+  const allergyMatch = clean.match(/(?:i'm allergic to|i am allergic to)\s+([^.,!?]{2,35})/i);
+  if (allergyMatch && allergyMatch[1]) {
+    extracted.push(`Allergic to ${allergyMatch[1].trim()}`);
+  }
+
+  const dislikeMatch = clean.match(/(?:i hate|i can't stand|i despise|i'm afraid of|i am afraid of)\s+([^.,!?]{3,35})/i);
+  if (dislikeMatch && dislikeMatch[1]) {
+    const target = dislikeMatch[1].trim();
+    if (!['you', 'this', 'it', 'that'].includes(target.toLowerCase())) {
+      extracted.push(`Dislikes or fears ${target}`);
+    }
+  }
+
+  // 6. Pets & Animals
+  const petMatch = clean.match(
+    /(?:i have a|got a|my)\s+(cat|dog|puppy|kitten|bird|bunny|rabbit|hamster|snake|ferret|pet)(?:\s+named\s+([A-Za-z0-9_-]+))?/i
+  );
+  if (petMatch) {
+    if (petMatch[2]) {
+      extracted.push(`Has a ${petMatch[1].toLowerCase()} named ${petMatch[2]}`);
+    } else {
+      extracted.push(`Has a ${petMatch[1].toLowerCase()}`);
+    }
+  }
+
+  // 7. Occupation, major, or project
+  const workMatch = clean.match(
+    /(?:i work as a|i work as an|i'm a|i am a|working on my|studying)\s+([A-Za-z0-9\s-]{3,35}?)(?=[.,!?]|$|\s+(?:and|at|in|right now|tonight|today))/i
+  );
+  if (workMatch && workMatch[1]) {
+    const role = workMatch[1].trim();
+    if (
+      ![
+        'little',
+        'bit',
+        'lot',
+        'fan',
+        'friend',
+        'stranger',
+        'human',
+        'person',
+        'mess',
+        'idiot',
+        'loser',
+      ].includes(role.toLowerCase().split(' ')[0])
+    ) {
+      extracted.push(`Background/activity: ${role}`);
+    }
+  }
+
+  // 8. Location or hometown
+  const locationMatch = clean.match(/(?:i live in|i'm from|i am from)\s+([A-Za-z\s]{2,30}?)(?=[.,!?]|$)/i);
+  if (locationMatch && locationMatch[1]) {
+    extracted.push(`Lives in / from ${locationMatch[1].trim()}`);
+  }
+
+  // 9. Birthday
+  const bdayMatch = clean.match(/my birthday is\s+([A-Za-z0-9\s,]{3,25}?)(?=[.!?]|$)/i);
+  if (bdayMatch && bdayMatch[1]) {
+    extracted.push(`Birthday is ${bdayMatch[1].trim()}`);
+  }
+
+  // 10. Sleep habits & schedule
   if (
     lower.includes("can't sleep") ||
     lower.includes('insomnia') ||
     lower.includes('awake at') ||
+    lower.includes('stayed up') ||
     lower.includes('sleep schedule')
   ) {
     extracted.push('Often stays up late or has trouble sleeping');
   }
-  if (lower.match(/(?:wake up early|exam tomorrow|work tomorrow|early meeting|test tomorrow)/i)) {
+  if (lower.match(/(?:wake up early|exam tomorrow|work tomorrow|early meeting|test tomorrow|shift tomorrow)/i)) {
     extracted.push('Has an early morning schedule or upcoming exam/shift');
   }
 
-  // Hobbies & Skills
-  const hobby = lower.match(/(?:i play|i practice|i train in|learning)\s+([A-Za-z\s]{3,25})/i);
+  // 11. Hobbies & Skills
+  const hobby = clean.match(/(?:i play|i practice|i train in|learning)\s+([A-Za-z0-9\s]{3,25}?)(?=[.,!?]|$)/i);
   if (hobby && hobby[1]) {
-    extracted.push(`Enjoys ${hobby[1].trim()}`);
+    extracted.push(`Practices/plays ${hobby[1].trim()}`);
   }
 
-  return extracted;
+  return Array.from(new Set(extracted));
 }
