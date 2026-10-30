@@ -12,7 +12,16 @@ interface CharacterRegistryModalProps {
   onSelectCharacter: (charId: string) => void;
 }
 
-type CategoryFilter = 'all' | 'anime' | 'helluva' | 'dc' | 'gaming' | 're';
+type CategoryFilter =
+  | 'all'
+  | 'motorsport'
+  | 'music'
+  | 'statesmen'
+  | 'anime'
+  | 'helluva'
+  | 'dc'
+  | 'gaming'
+  | 're';
 
 export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
   isOpen,
@@ -43,10 +52,30 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
     ['re', 'resident_evil'].includes(u) ||
     ['leon', 'ada', 'jill', 'claire-redfield', 'chris-redfield', 'albert-wesker'].includes(id || '');
 
+  const isMotorsportUniverse = (u: Universe) =>
+    ['Motorsport', 'motorsport', 'Top Gear', 'Automotive Icons', 'Formula 1'].includes(u);
+
+  const isMusicUniverse = (u: Universe) =>
+    ['Music Legends', 'Retro Icons', 'music', 'Music'].includes(u);
+
+  const isStatesmenUniverse = (u: Universe) =>
+    [
+      'Statesmen & Strategists',
+      'Statesmen & Global Leaders',
+      'Global Leaders',
+      'Statesmen',
+    ].includes(u);
+
   const filtered = characters.filter(c => {
     const matchesCategory =
       filter === 'all'
         ? true
+        : filter === 'motorsport'
+        ? isMotorsportUniverse(c.universe)
+        : filter === 'music'
+        ? isMusicUniverse(c.universe)
+        : filter === 'statesmen'
+        ? isStatesmenUniverse(c.universe)
         : filter === 'anime'
         ? isAnimeUniverse(c.universe)
         : filter === 'helluva'
@@ -65,6 +94,8 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
     const q = searchQuery.toLowerCase();
     return (
       c.name.toLowerCase().includes(q) ||
+      (c.codename || '').toLowerCase().includes(q) ||
+      (c.bio || '').toLowerCase().includes(q) ||
       (c.role || c.tag || '').toLowerCase().includes(q) ||
       (c.tagline || c.status || '').toLowerCase().includes(q) ||
       String(c.universe).toLowerCase().includes(q)
@@ -82,7 +113,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
               <span className="truncate">Operative & Character Registry</span>
             </h3>
             <p className="text-xs text-slate-400 mt-0.5 truncate">
-              Browse {characters.length} characters across Anime & Manga, HelluvaVerse, DC & Comics, and Gaming Legends.
+              Browse {characters.length} characters across Motorsport, Music Legends, Statesmen & Strategists, Anime, HelluvaVerse, DC, and Gaming.
             </p>
           </div>
           <button
@@ -102,7 +133,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search operatives by name, role, or universe tag..."
+              placeholder="Search operatives by name, codename, role, or category..."
               className="w-full bg-[#0d0f17] border border-white/10 rounded-xl pl-10 pr-4 py-2 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
             />
           </div>
@@ -113,6 +144,21 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 touch-pan-x pb-1 px-1 w-full">
             {[
               { id: 'all' as CategoryFilter, label: 'All Characters', count: characters.length },
+              {
+                id: 'motorsport' as CategoryFilter,
+                label: 'Motorsport',
+                count: characters.filter(c => isMotorsportUniverse(c.universe)).length,
+              },
+              {
+                id: 'music' as CategoryFilter,
+                label: 'Music Legends',
+                count: characters.filter(c => isMusicUniverse(c.universe)).length,
+              },
+              {
+                id: 'statesmen' as CategoryFilter,
+                label: 'Statesmen & Strategists',
+                count: characters.filter(c => isStatesmenUniverse(c.universe)).length,
+              },
               {
                 id: 'anime' as CategoryFilter,
                 label: 'Anime & Manga',
@@ -190,11 +236,18 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                   )}
                 </div>
 
-                {/* Middle Column: 4-Row Stacked Info */}
+                {/* Middle Column: Stacked Info */}
                 <div className="flex-1 min-w-0 pr-1">
-                  <h4 className="font-bold text-sm text-white truncate block">
-                    {char.name}
-                  </h4>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <h4 className="font-bold text-sm text-white truncate">
+                      {char.name}
+                    </h4>
+                    {char.codename && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
+                        {char.codename}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 flex-wrap mt-1 min-w-0">
                     <span className="inline-block text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-purple-950/80 text-purple-300 border border-purple-500/30 max-w-full truncate">
                       {char.role || char.tag}
@@ -205,7 +258,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-zinc-400 truncate block mt-0.5">
-                    {char.tagline || char.status}
+                    {char.bio || char.tagline || char.status}
                   </p>
                   {char.scenario && (
                     <p

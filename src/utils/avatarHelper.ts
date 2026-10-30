@@ -32,6 +32,12 @@ const KNOWN_PORTRAIT_IDS = new Set([
   'redhood',
   'raven',
   'reze',
+  'clarkson',
+  'hammond',
+  'may',
+  'jeremy-clarkson',
+  'richard-hammond',
+  'james-may',
 ]);
 
 const NAME_TO_LOCAL_PORTRAIT_ID: Record<string, string> = {
@@ -91,6 +97,18 @@ const NAME_TO_LOCAL_PORTRAIT_ID: Record<string, string> = {
   raven: 'raven',
   'rachel roth': 'raven',
   reze: 'reze',
+  'jeremy clarkson': 'clarkson',
+  'jeremy clarkson ("jezza")': 'clarkson',
+  clarkson: 'clarkson',
+  jezza: 'clarkson',
+  'richard hammond': 'hammond',
+  'richard hammond ("the hamster")': 'hammond',
+  hammond: 'hammond',
+  'the hamster': 'hammond',
+  'james may': 'may',
+  'james may ("captain slow")': 'may',
+  may: 'may',
+  'captain slow': 'may',
 };
 
 /**
@@ -108,6 +126,10 @@ export function resolveAvatarUrl(url?: string, charId?: string): string {
           .replace(/^https:\/\//i, 'http://')
           .split('/revision/')[0]
           .split('?')[0];
+        return `https://wsrv.nl/?url=${encodeURIComponent(cleanInner)}&output=png&w=300&h=300&fit=cover&a=top`;
+      }
+      if (inner && (inner.includes('wikimedia.org') || inner.includes('wikipedia.org'))) {
+        const cleanInner = inner.split('?')[0];
         return `https://wsrv.nl/?url=${encodeURIComponent(cleanInner)}&output=png&w=300&h=300&fit=cover&a=top`;
       }
     } catch {
@@ -130,6 +152,11 @@ export function resolveAvatarUrl(url?: string, charId?: string): string {
 
     // Normalize upstream protocol to http:// so wsrv.nl fetches from Fandom without TLS JA3 challenge
     const rawUrl = stripped.replace(/^https:\/\//i, 'http://');
+    return `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&output=png&w=300&h=300&fit=cover&a=top`;
+  }
+
+  if (url && (url.includes('wikimedia.org') || url.includes('wikipedia.org'))) {
+    const rawUrl = url.split('?')[0];
     return `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&output=png&w=300&h=300&fit=cover&a=top`;
   }
 

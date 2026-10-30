@@ -1248,8 +1248,26 @@ export default function App() {
       setActiveConversationIds(prev => [id, ...prev]);
       incrementOperativeUserCount(id);
     }
-    if (!chats[id]) {
-      setChats(prev => ({ ...prev, [id]: [] }));
+
+    const selectedChar = characters.find(c => c.id === id);
+    const initialGreetingMsg: Message[] = selectedChar?.greeting
+      ? [
+          {
+            id: `greeting-${id}`,
+            sender: 'char',
+            text: selectedChar.greeting,
+            variants: [selectedChar.greeting],
+            activeVariantIndex: 0,
+            timestamp: Date.now(),
+          },
+        ]
+      : [];
+
+    if (!chats[id] || (chats[id].length === 0 && initialGreetingMsg.length > 0)) {
+      setChats(prev => ({ ...prev, [id]: initialGreetingMsg }));
+    }
+    if (burnerMode && (!burnerChats[id] || (burnerChats[id].length === 0 && initialGreetingMsg.length > 0))) {
+      setBurnerChats(prev => ({ ...prev, [id]: initialGreetingMsg }));
     }
 
     setUnreadCounts(prev => ({ ...prev, [id]: 0 }));

@@ -79,22 +79,78 @@ export const Sidebar: React.FC<SidebarProps> = ({
   appName = 'EchoVault',
 }) => {
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [sidebarCategory, setSidebarCategory] = useState<
+    'all' | 'motorsport' | 'music' | 'statesmen' | 'anime' | 'helluva' | 'dc' | 'gaming'
+  >('all');
   const touchStartXRef = useRef<number | null>(null);
 
   const displayAppName =
     !appName || appName.toUpperCase() === 'PULSEDIRECT' ? 'EchoVault' : appName;
 
-  // Characters with stories
-  const storyChars = characters.filter(c => !!c.storyImg);
+  const matchesSidebarCategory = (char: Character) => {
+    const u = String(char.universe);
+    if (sidebarCategory === 'all') return true;
+    if (sidebarCategory === 'motorsport') {
+      return ['Motorsport', 'motorsport', 'Top Gear', 'Automotive Icons', 'Formula 1'].includes(u);
+    }
+    if (sidebarCategory === 'music') {
+      return ['Music Legends', 'Retro Icons', 'music', 'Music'].includes(u);
+    }
+    if (sidebarCategory === 'statesmen') {
+      return [
+        'Statesmen & Strategists',
+        'Statesmen & Global Leaders',
+        'Global Leaders',
+        'Statesmen',
+      ].includes(u);
+    }
+    if (sidebarCategory === 'anime') {
+      return ['jujutsu', 'cyberpunk', 'romcom', 'frieren', 'aot', 'csm', 'anime', 'Anime & Manga'].includes(u);
+    }
+    if (sidebarCategory === 'helluva') {
+      return ['helluva', 'hellaverse', 'HelluvaVerse'].includes(u);
+    }
+    if (sidebarCategory === 'dc') {
+      return ['DC Universe', 'DC & Comics', 'dc', 'marvel'].includes(u);
+    }
+    if (sidebarCategory === 'gaming') {
+      return ['Gaming Legends', 'scifi', 'fantasy', 're', 'resident_evil'].includes(u);
+    }
+    return true;
+  };
+
+  const matchesSearch = (char: Character) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      char.name.toLowerCase().includes(q) ||
+      char.tag.toLowerCase().includes(q) ||
+      (char.codename || '').toLowerCase().includes(q) ||
+      (char.bio || '').toLowerCase().includes(q) ||
+      String(char.universe).toLowerCase().includes(q)
+    );
+  };
+
+  // Characters with stories (filtered by active sidebar category)
+  const storyChars = characters.filter(c => !!c.storyImg && matchesSidebarCategory(c));
 
   // Filtered active conversations
   const filteredIds = activeConversationIds.filter(id => {
     const char = characters.find(c => c.id === id);
     if (!char) return false;
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return char.name.toLowerCase().includes(q) || char.tag.toLowerCase().includes(q);
+    return matchesSidebarCategory(char) && matchesSearch(char);
   });
+
+  // Matching roster characters when a category filter or search query is active
+  const directoryRosterChars =
+    sidebarCategory !== 'all' || searchQuery.trim().length > 0
+      ? characters.filter(
+          c =>
+            !activeConversationIds.includes(c.id) &&
+            matchesSidebarCategory(c) &&
+            matchesSearch(c)
+        )
+      : [];
 
   // Smooth touch swipe-left gesture to close sidebar drawer on mobile
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -222,17 +278,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="p-3 border-b border-white/10">
+      {/* Search Bar & Category Filter Pills */}
+      <div className="p-3 border-b border-white/10 space-y-2">
         <div className="relative">
           <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
-            placeholder="Search conversations..."
+            placeholder="Search operatives, codenames..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="w-full bg-[#131622]/90 border border-white/10 rounded-2xl pl-9 pr-3.5 py-2 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
           />
+        </div>
+
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar touch-pan-x pb-0.5">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'motorsport', label: 'Motorsport' },
+            { id: 'music', label: 'Music Legends' },
+            { id: 'statesmen', label: 'Statesmen & Strategists' },
+            { id: 'anime', label: 'Anime' },
+            { id: 'helluva', label: 'Helluva' },
+            { id: 'dc', label: 'DC & Comics' },
+            { id: 'gaming', label: 'Gaming' },
+          ].map(tab => {
+            const active = sidebarCategory === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSidebarCategory(tab.id as any)}
+                className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition cursor-pointer ${
+                  active
+                    ? 'bg-purple-600 text-white shadow-sm shadow-purple-900/40'
+                    : 'bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-slate-200 border border-white/10'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -459,23 +544,76 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
 
-        {activeConversationIds.length === 0 && (
+        {directoryRosterChars.length > 0 && (
+          <div className="pt-2 space-y-1">
+            <div className="flex items-center justify-between px-2 py-1">
+              <span className="text-[11px] font-semibold text-purple-300">
+                Directory Roster ({directoryRosterChars.length})
+              </span>
+            </div>
+            {directoryRosterChars.map(char => (
+              <div
+                key={char.id}
+                onClick={() => {
+                  onSelectCharacter(char.id);
+                  onCloseMobile();
+                }}
+                className="p-2.5 rounded-2xl cursor-pointer flex items-center justify-between hover:bg-white/[0.04] border border-transparent hover:border-purple-500/30 transition group"
+              >
+                <div className="flex items-center space-x-3 min-w-0 flex-1">
+                  <div className="relative w-10 h-10 rounded-full overflow-hidden border border-white/10 flex-shrink-0 bg-[#161a2b]">
+                    <img
+                      src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
+                      alt={char.name}
+                      referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
+                      onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
+                      className="w-full h-full rounded-full object-cover object-top group-hover:scale-105 transition"
+                    />
+                    {char.online && (
+                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border border-[#0d0f17]"></span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <h4 className="text-xs font-semibold text-slate-100 truncate">
+                        {char.name}
+                      </h4>
+                      {char.codename && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 flex-shrink-0">
+                          {char.codename}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                      {char.bio || char.tagline || char.status}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeConversationIds.length === 0 && directoryRosterChars.length === 0 && (
           <div className="p-6 text-center text-slate-500 my-8 space-y-2">
             <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 mx-auto flex items-center justify-center text-slate-400">
               <MessageSquare className="w-5 h-5 text-purple-400/70" />
             </div>
             <p className="text-xs font-semibold text-slate-300">No Active Chats</p>
             <p className="text-[11px] text-slate-500 leading-relaxed max-w-[200px] mx-auto">
-              Select a character from the directory to start a conversation.
+              Select a category above or browse the directory to start a conversation.
             </p>
           </div>
         )}
 
-        {activeConversationIds.length > 0 && filteredIds.length === 0 && (
-          <div className="p-6 text-center text-slate-500 text-xs">
-            No conversations matching "{searchQuery}"
-          </div>
-        )}
+        {activeConversationIds.length > 0 &&
+          filteredIds.length === 0 &&
+          directoryRosterChars.length === 0 && (
+            <div className="p-6 text-center text-slate-500 text-xs">
+              No conversations matching "{searchQuery}"
+            </div>
+          )}
       </div>
 
       {/* PWA In-App Install Prompt */}

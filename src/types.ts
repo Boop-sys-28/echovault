@@ -15,6 +15,8 @@ export type Universe =
   | 'dc'
   | 'scifi'
   | 'fantasy'
+  | 'Motorsport'
+  | 'motorsport'
   | string;
 
 export interface UserProfile {
@@ -51,6 +53,9 @@ export interface Character {
   id: string;
   name: string;
   fullName?: string;
+  codename?: string;
+  bio?: string;
+  greeting?: string;
   tagline?: string;
   role?: string;
   tag: string;

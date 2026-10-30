@@ -1201,10 +1201,66 @@ const ENRICHED_BASE_CHARACTERS: Character[] = BASE_CHARACTERS.map((char) => {
   };
 });
 
-export const CHARACTERS: Character[] = [...ENRICHED_BASE_CHARACTERS, ...EXPANDED_CHARACTERS];
+/**
+ * Dedicated category exports from the unified roster for Motorsport (Formula 1 Legends & Top Gear Trio),
+ * Music Legends / Retro Icons (1950s–1990s), and Statesmen & Strategists (Global Leaders & Military Commanders):
+ * - Motorsport: ayrton-senna, michael-schumacher, lewis-hamilton, fernando-alonso (ASTON_EL_NANO_14),
+ *   max-verstappen, sebastian-vettel, niki-lauda, alain-prost, kimi-raikkonen, juan-manuel-fangio,
+ *   jim-clark, nigel-mansell, gus-burton (CUP_BURTON_57), jeremy-clarkson (POWERRR_JEZZA_01),
+ *   richard-hammond (HAMSTER_APEX_38), james-may (CAPTAIN_SLOW_SPANNERS)
+ * - Music Legends: frank-sinatra (OL_BLUE_EYES), elvis-presley, chuck-berry, little-richard, buddy-holly,
+ *   john-lennon, paul-mccartney, george-harrison, ringo-starr, mick-jagger, keith-richards, aretha-franklin,
+ *   jimi-hendrix, freddie-mercury, brian-may, robert-plant, jimmy-page, david-gilmour, roger-waters,
+ *   stevie-nicks, david-bowie (STARMAN_72), michael-jackson, prince, madonna, axl-rose, slash, cyndi-lauper,
+ *   whitney-houston, kurt-cobain (GRUNGE_91), dave-grohl, liam-gallagher, noel-gallagher, thom-yorke,
+ *   dolores-oriordan
+ * - Statesmen & Strategists: abraham-lincoln (EMANCIPATOR_16), winston-churchill (BULLDOG_PRIME),
+ *   mahatma-gandhi (BAPU_SATYA), nelson-mandela (MADIBA_46664), franklin-d-roosevelt (NEW_DEAL_FDR),
+ *   julius-caesar (IMPERATOR_ROME), napoleon-bonaparte (EAGLE_CORSE), benjamin-netanyahu (SAYERET_BIBI),
+ *   narendra-modi (BHARAT_VIKAS), donald-trump (ART_OF_THE_DEAL), barack-obama (HOPE_44),
+ *   angela-merkel (KANZLER_BERLIN), volodymyr-zelenskyy (KYIV_SHIELD), lee-kuan-yew (LION_CITY_ARCHITECT),
+ *   vladimir-putin (KREMLIN_STRAT), dwight-d-eisenhower (OVERLORD_ACT), george-s-patton (OLD_BLOOD_GUTS),
+ *   bernard-montgomery (ALAMEIN_CHIEF), georgy-zhukov (VICTORY_MARSHAL), erwin-rommel (DESERT_FOX)
+ */
+export const MOTORSPORT_CHARACTERS: Character[] = EXPANDED_CHARACTERS.filter(
+  c => c.universe === 'Motorsport'
+);
+
+export const MUSIC_LEGENDS_CHARACTERS: Character[] = EXPANDED_CHARACTERS.filter(
+  c => c.universe === 'Music Legends'
+);
+
+export const STATESMEN_STRATEGISTS_CHARACTERS: Character[] = EXPANDED_CHARACTERS.filter(
+  c => c.universe === 'Statesmen & Strategists'
+);
+
+const seenCharIds = new Set<string>();
+export const CHARACTERS: Character[] = [...ENRICHED_BASE_CHARACTERS, ...EXPANDED_CHARACTERS].filter(
+  char => {
+    if (seenCharIds.has(char.id)) return false;
+    seenCharIds.add(char.id);
+    return true;
+  }
+);
+
 export const DEFAULT_CHARACTERS: Character[] = CHARACTERS;
 export { EXPANDED_CHARACTERS };
 
-export const INITIAL_MESSAGES: Record<string, Array<{ sender: 'user' | 'char'; text: string; timestamp: number }>> = {};
+export const INITIAL_MESSAGES: Record<
+  string,
+  Array<{ sender: 'user' | 'char'; text: string; timestamp: number }>
+> = Object.fromEntries(
+  CHARACTERS.filter(c => Boolean(c.greeting)).map(c => [
+    c.id,
+    [
+      {
+        sender: 'char' as const,
+        text: c.greeting!,
+        timestamp: Date.now(),
+      },
+    ],
+  ])
+);
 
 export { PRESET_GROUP_ROOMS, checkAndUnlockGroupRooms } from './groupRooms';
+

@@ -384,7 +384,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
       return (
         c.name.toLowerCase().includes(q) ||
         c.tag.toLowerCase().includes(q) ||
-        c.universe.toLowerCase().includes(q)
+        (c.codename || '').toLowerCase().includes(q) ||
+        (c.bio || '').toLowerCase().includes(q) ||
+        String(c.universe).toLowerCase().includes(q)
       );
     });
 
@@ -416,7 +418,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
-              placeholder="Search by name or universe..."
+              placeholder="Search by name, codename, or universe..."
               value={emptySearch}
               onChange={(e) => setEmptySearch(e.target.value)}
               className="w-full bg-[#131622]/90 border border-white/10 rounded-2xl pl-10 pr-4 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/70 transition"
@@ -445,9 +447,16 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h4 className="text-sm font-bold text-white truncate group-hover:text-purple-300 transition">
-                      {char.name}
-                    </h4>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <h4 className="text-sm font-bold text-white truncate group-hover:text-purple-300 transition">
+                        {char.name}
+                      </h4>
+                      {char.codename && (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
+                          {char.codename}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1.5 flex-wrap mt-1 min-w-0">
                       <span className="text-[11px] text-slate-400 truncate max-w-full block">
                         {char.tag}
@@ -460,7 +469,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                   </div>
                 </div>
                 <p className="text-xs text-slate-400 truncate mb-4 leading-relaxed">
-                  {char.tagline || char.status}
+                  {char.bio || char.tagline || char.status}
                 </p>
               </div>
 
