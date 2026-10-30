@@ -1,4 +1,5 @@
 import { Character } from '../types';
+import { resolveAvatarUrl } from '../utils/avatarHelper';
 
 interface ExpandedSeed {
   id: string;
@@ -1473,7 +1474,19 @@ DISTINCT TYPING & ROLEPLAY STYLE:
 - Zero generic AI assistant greetings or forced interview questions at the end of every reply.
 - Break thoughts into 1–3 natural bubbles separated by ' || '.`;
 
+  const actionMatch = seed.voiceAndLore.match(/\*([^*]+)\*/);
+  const sampleAction = actionMatch
+    ? `*${actionMatch[1].trim()}*`
+    : `*glances down at the screen as a new message from {{user}} arrives*`;
+
+  const defaultScenario = `{{char}} (${seed.role}) is currently ${seed.tagline.replace(/\/\/.*$/, '').trim()} when a direct message from {{user}} comes through. {{char}} and {{user}} are new contacts at baseline Stranger affinity (0), interacting in real time.`;
+
+  const defaultMesExamples = `<START>
+{{user}}: Hey, are you busy right now?
+{{char}}: ${sampleAction} ${seed.storyText} || You caught {{char}} right in the middle of it, {{user}}.`;
+
   const baselineUsers = getDeterministicExpandedUserCount(seed.id, index);
+  const resolvedPortrait = resolveAvatarUrl(seed.avatarUrl, seed.id);
 
   return {
     id: seed.id,
@@ -1484,9 +1497,9 @@ DISTINCT TYPING & ROLEPLAY STYLE:
     tagline: seed.tagline,
     status: seed.tagline,
     universe: seed.universe,
-    avatar: seed.avatarUrl,
-    avatarUrl: seed.avatarUrl,
-    storyImg: seed.avatarUrl,
+    avatar: resolvedPortrait,
+    avatarUrl: resolvedPortrait,
+    storyImg: resolvedPortrait,
     storyText: seed.storyText,
     storyTime: seed.storyTime,
     song: seed.song,
@@ -1502,5 +1515,7 @@ DISTINCT TYPING & ROLEPLAY STYLE:
     interactionCount: baselineUsers,
     system: fullSystemPrompt,
     systemInstruction: fullSystemPrompt,
+    scenario: defaultScenario,
+    mesExamples: defaultMesExamples,
   };
 });

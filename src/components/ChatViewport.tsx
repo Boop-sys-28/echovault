@@ -25,6 +25,9 @@ import {
   MoreVertical,
   Users,
   Activity,
+  ChevronLeft,
+  ChevronRight,
+  RotateCw,
 } from 'lucide-react';
 import {
   Character,
@@ -73,6 +76,9 @@ interface ChatViewportProps {
   onClearChat?: () => void;
   onDeleteChat?: () => void;
   onDeleteMessage?: (msgId: string) => void;
+  regeneratingMsgId?: string | null;
+  onSwipeMessageVariant?: (msgId: string, direction: 'prev' | 'next') => void;
+  onRegenerateMessageVariant?: (msgId: string) => void;
   isFollowed?: boolean;
   isStoryViewed?: boolean;
   memoriesCount?: number;
@@ -138,6 +144,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   onClearChat,
   onDeleteChat,
   onDeleteMessage,
+  regeneratingMsgId = null,
+  onSwipeMessageVariant,
+  onRegenerateMessageVariant,
   isFollowed = true,
   isStoryViewed = false,
   memoriesCount = 0,
@@ -236,6 +245,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                   src={resolveAvatarUrl(member.avatarUrl || member.avatar, member.id)}
                   alt={member.name}
                   referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
                   onClick={() => onSelectCharacter(member.id)}
                   onError={(e) => handleAvatarImageError(e, member.name, member.themeAccent)}
                   title={`Open DM with ${member.name}`}
@@ -291,6 +301,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     src={resolveAvatarUrl(msg.avatarUrl || senderChar?.avatarUrl || senderChar?.avatar || '', msg.senderId)}
                     alt={msg.senderName}
                     referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
                     onError={(e) => handleAvatarImageError(e, msg.senderName, senderChar?.themeAccent)}
                     onClick={() => senderChar && onSelectCharacter(senderChar.id)}
                     className="w-8 h-8 rounded-full object-cover object-top border border-white/15 bg-[#161a2b] flex-shrink-0 mt-1 cursor-pointer"
@@ -428,6 +439,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                       src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                       alt={char.name}
                       referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
                       onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                       className="w-full h-full rounded-full object-cover object-top border-2 border-[#0d0f17] bg-[#161a2b]"
                     />
@@ -471,7 +483,12 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   };
 
   // Ensure any message containing `||` is split into individual bubbles with separate, increasing timestamps
-  const renderedMessages: Message[] = [];
+  interface RenderedMessageItem extends Message {
+    sourceMsgId: string;
+    isLastPartOfMsg: boolean;
+  }
+
+  const renderedMessages: RenderedMessageItem[] = [];
   let lastRenderedTs = 0;
   for (const msg of messages) {
     const parts = msg.text.includes('||') ? splitResponseIntoBubbles(msg.text) : [msg.text];
@@ -482,6 +499,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
       renderedMessages.push({
         ...msg,
         id: partIdx === 0 ? msg.id : `${msg.id}-part-${partIdx}`,
+        sourceMsgId: msg.id,
+        isLastPartOfMsg: partIdx === parts.length - 1,
         text: partText,
         image: partIdx === 0 ? msg.image : undefined,
         replyTo: partIdx === 0 ? msg.replyTo : undefined,
@@ -543,6 +562,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
                 alt={character.name}
                 referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
                 onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
                 className={`w-full h-full rounded-full object-cover object-top border-2 border-[#090a0f] bg-[#1a1e2e] ${
                   character.storyImg && !isFollowed
@@ -810,6 +830,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
                 alt={character.name}
                 referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
                 onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
                 className="w-full h-full rounded-full object-cover object-top border-2 border-[#090a0f] bg-[#161a2b]"
               />
@@ -885,12 +906,24 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             <div
               key={msg.id}
               id={msg.id}
-              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} msg-pop group transition-all duration-300 rounded-2xl ${
+              className={`flex items-start gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} msg-pop group transition-all duration-300 rounded-2xl ${
                 isHighlighted ? 'bg-purple-500/20 p-1 ring-1 ring-purple-400/50' : ''
               }`}
             >
-              {/* Message Bubble with Reply & Delete Reference */}
-              <div className="relative group max-w-[85%] sm:max-w-[75%]">
+              {!isUser && (
+                <img
+                  src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
+                  alt={character.name}
+                  referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
+                  onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
+                  onClick={handleAvatarClick}
+                  className="w-8 h-8 rounded-full object-cover object-top border border-white/15 bg-[#161a2b] flex-shrink-0 mt-1 cursor-pointer"
+                />
+              )}
+              <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[75%] min-w-0`}>
+                {/* Message Bubble with Reply & Delete Reference */}
+                <div className="relative group max-w-full">
                 {/* Floating Reply & Delete Action Bar */}
                 <div
                   className={`absolute -top-3 ${
@@ -941,6 +974,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                       src={msg.image}
                       alt="Shared media"
                       referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
                       onError={(e) => handleAvatarImageError(e, isUser ? userCodename : character.name, character.themeAccent)}
                       onClick={() => onImageClick?.(msg.image!, msg.text, isUser ? userCodename : character.name)}
                       className="w-full h-auto object-cover max-h-64 hover:scale-[1.02] transition cursor-pointer"
@@ -981,11 +1015,83 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 )}
               </div>
 
-              <div className="flex items-center gap-1 mt-1 px-1">
+              <div className="flex items-center gap-2 mt-1 px-1 flex-wrap">
                 <span className="text-[10px] text-slate-500 tabular-nums">
                   {formatTime(msg.timestamp)}
                 </span>
                 {isUser && <CheckCheck className="w-3 h-3 text-purple-400" />}
+
+                {/* Character.ai Multi-Variant Swipe Indicator (< 1/2 >) & Regenerate Control */}
+                {!isUser && msg.isLastPartOfMsg && (onSwipeMessageVariant || onRegenerateMessageVariant) && (() => {
+                  const variantsList =
+                    msg.variants && msg.variants.length > 0 ? msg.variants : [msg.text];
+                  const totalVariants = variantsList.length;
+                  const activeVariantIdx =
+                    typeof msg.activeVariantIndex === 'number'
+                      ? Math.min(Math.max(0, msg.activeVariantIndex), totalVariants - 1)
+                      : 0;
+                  const isRegeneratingThis = regeneratingMsgId === msg.sourceMsgId;
+
+                  return (
+                    <div className="inline-flex items-center gap-1 ml-1 select-none">
+                      <div className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-lg bg-white/[0.04] border border-white/10 text-slate-300">
+                        <button
+                          type="button"
+                          disabled={activeVariantIdx <= 0 || isRegeneratingThis}
+                          onClick={() => onSwipeMessageVariant?.(msg.sourceMsgId, 'prev')}
+                          title="Previous reply variant"
+                          aria-label="Previous reply variant"
+                          className="p-0.5 rounded hover:bg-white/10 hover:text-cyan-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-300 transition cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <ChevronLeft className="w-3 h-3" />
+                        </button>
+                        <span className="px-1 text-[10px] font-mono tabular-nums text-slate-300">
+                          {activeVariantIdx + 1}/{totalVariants}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isRegeneratingThis}
+                          onClick={() => {
+                            if (activeVariantIdx < totalVariants - 1) {
+                              onSwipeMessageVariant?.(msg.sourceMsgId, 'next');
+                            } else {
+                              onRegenerateMessageVariant?.(msg.sourceMsgId);
+                            }
+                          }}
+                          title={
+                            activeVariantIdx < totalVariants - 1
+                              ? 'Next reply variant'
+                              : 'Generate new reply variant'
+                          }
+                          aria-label={
+                            activeVariantIdx < totalVariants - 1
+                              ? 'Next reply variant'
+                              : 'Generate new reply variant'
+                          }
+                          className="p-0.5 rounded hover:bg-white/10 hover:text-cyan-300 disabled:opacity-40 transition cursor-pointer"
+                        >
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {onRegenerateMessageVariant && (
+                        <button
+                          type="button"
+                          disabled={isRegeneratingThis}
+                          onClick={() => onRegenerateMessageVariant(msg.sourceMsgId)}
+                          title="Regenerate reply variant"
+                          aria-label="Regenerate reply variant"
+                          className="p-1 rounded-lg bg-white/[0.04] hover:bg-purple-500/20 border border-white/10 hover:border-purple-500/40 text-slate-400 hover:text-purple-300 disabled:opacity-40 transition cursor-pointer"
+                        >
+                          <RotateCw
+                            className={`w-2.5 h-2.5 ${isRegeneratingThis ? 'animate-spin text-purple-300' : ''}`}
+                          />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
               </div>
             </div>
           );

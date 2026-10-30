@@ -38,6 +38,7 @@ export const FollowLockedStoryModal: React.FC<FollowLockedStoryModalProps> = ({
               src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
               referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-[#131622] bg-[#161a2b] brightness-75"
             />

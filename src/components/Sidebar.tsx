@@ -198,6 +198,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                     alt={char.name}
                     referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className={`w-full h-full rounded-full object-cover object-top border-2 border-[#0d0f17] bg-[#161a2b] ${
                       !isFollowed ? 'brightness-75' : isViewed ? 'brightness-90' : ''
@@ -394,6 +395,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                     alt={char.name}
                     referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className="w-full h-full rounded-full object-cover object-top group-hover:scale-105 transition"
                   />
@@ -494,6 +496,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               src={userProfile.avatarUrl}
               alt={userProfile.codename}
               referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
               onError={(e) => handleAvatarImageError(e, userProfile.codename || 'Operative')}
               className="w-8 h-8 rounded-full border border-purple-500/40 flex-shrink-0 object-cover"
             />

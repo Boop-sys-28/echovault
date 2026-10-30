@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { Character, Message, CaiImportResult } from '../types';
 import { resolveCaiLink, CAI_LINK_PRESETS, CaiLinkPreset } from '../utils/caiImporter';
-import { handleAvatarImageError } from '../utils/avatarHelper';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 interface CaiImportModalProps {
   isOpen: boolean;
@@ -92,9 +92,10 @@ export const CaiImportModal: React.FC<CaiImportModalProps> = ({
     if (isNewChar) {
       const generatedId = `custom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       finalCharId = generatedId;
+      const resolvedName = newCharName.trim() || parseResult.charName || 'Custom C.AI';
       customChar = {
         id: generatedId,
-        name: newCharName.trim() || parseResult.charName || 'Custom C.AI',
+        name: resolvedName,
         tag: newCharTag.trim() || 'C.AI LINKED',
         universe: 'anime',
         avatar: parseResult.charAvatar || '/avatars/gojo.png',
@@ -105,7 +106,13 @@ export const CaiImportModal: React.FC<CaiImportModalProps> = ({
         status: 'Synced from Character.AI link',
         system:
           parseResult.charSystem ||
-          `You are ${newCharName.trim() || parseResult.charName}. Continue chatting with the user based on your synced Character.AI memories.`,
+          `You are ${resolvedName}. Continue chatting with {{user}} based on your synced Character.AI memories and persona.`,
+        scenario:
+          parseResult.charScenario ||
+          `{{char}} and {{user}} are continuing their direct conversation synced from Character.AI.`,
+        mesExamples:
+          parseResult.charMesExamples ||
+          `<START>\n{{user}}: Hey, are you there?\n{{char}}: *glances at the screen* Right here, {{user}}.`,
         online: true,
       };
     }
@@ -215,9 +222,10 @@ export const CaiImportModal: React.FC<CaiImportModalProps> = ({
                     }`}
                   >
                     <img
-                      src={preset.avatar}
+                      src={resolveAvatarUrl(preset.avatar, preset.charId)}
                       alt={preset.name}
                       referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
                       onError={(e) => handleAvatarImageError(e, preset.name)}
                       className="w-7 h-7 rounded-full object-cover object-top border border-white/15 flex-shrink-0 bg-zinc-900"
                     />

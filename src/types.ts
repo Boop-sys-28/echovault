@@ -65,6 +65,8 @@ export interface Character {
   themeAccent?: string;
   system: string;
   systemInstruction?: string;
+  scenario?: string;
+  mesExamples?: string;
   online?: boolean;
   relationshipLevel?: number;
   affinity?: number;
@@ -90,6 +92,8 @@ export interface Message {
   image?: string;
   timestamp: number;
   replyTo?: ReplyReference;
+  variants?: string[];
+  activeVariantIndex?: number;
 }
 
 export interface CallState {
@@ -123,6 +127,8 @@ export interface CaiImportResult {
   charName: string;
   charTag?: string;
   charSystem?: string;
+  charScenario?: string;
+  charMesExamples?: string;
   charAvatar?: string;
   messages: Message[];
   factsExtracted: string[];
@@ -147,6 +153,8 @@ export interface CharacterResponseDirective {
   pacing: ResponsePacing;
   customInstruction: string;
   systemOverride?: string;
+  scenarioOverride?: string;
+  mesExamplesOverride?: string;
   updatedAt: number;
 }
 

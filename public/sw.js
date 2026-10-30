@@ -1,7 +1,5 @@
-const CACHE_NAME = 'echovault-v1';
+const CACHE_NAME = 'echovault-v3';
 const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/favicon.ico',
   '/icon.svg',
@@ -11,11 +9,11 @@ const PRECACHE_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches
       .open(CACHE_NAME)
       .then((cache) => cache.addAll(PRECACHE_ASSETS))
-      .then(() => self.skipWaiting())
       .catch((err) => {
         console.warn('Pre-cache error:', err);
       })
@@ -41,38 +39,49 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
+  if (request.method !== 'GET') return;
 
-  // Never cache non-GET requests or server API proxy calls
-  if (request.method !== 'GET' || request.url.includes('/api/')) {
+  const url = new URL(request.url);
+
+  // Never intercept API calls, Vite dev modules, source files, or compiled CSS/JS bundles
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.endsWith('.css') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.ts') ||
+    url.pathname.endsWith('.tsx')
+  ) {
     return;
   }
 
-  // Handle navigation requests (SPA HTML fallback)
+  // Network-first for navigation requests
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).catch(async () => {
         const cache = await caches.open(CACHE_NAME);
         const cached = await cache.match('/index.html');
-        return cached || new Response('Offline', { status: 200, headers: { 'Content-Type': 'text/html' } });
+        return (
+          cached ||
+          new Response('Offline', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          })
+        );
       })
     );
     return;
   }
 
-  // Asset caching: Stale-While-Revalidate
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      const fetchPromise = fetch(request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseToCache));
-          }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
-
-      return cachedResponse || fetchPromise;
-    })
-  );
+  // Only serve static icon/manifest assets from cache with network fallback
+  if (PRECACHE_ASSETS.includes(url.pathname)) {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        return cachedResponse || fetch(request);
+      })
+    );
+  }
 });

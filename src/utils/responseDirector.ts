@@ -119,9 +119,97 @@ export function clearCharacterDirective(charId: string): Record<string, Characte
 }
 
 /**
+ * Replaces Character.ai template macros ({{char}}, {{user}}, <BOT>, <USER>)
+ * with the active character's name and active user's handle/codename.
+ */
+export function replaceCharacterMacros(
+  rawText: string,
+  charName: string,
+  userName: string = 'You'
+): string {
+  if (!rawText) return '';
+  const safeChar = (charName || 'Character').trim();
+  const safeUser = (userName || 'You').trim();
+  return rawText
+    .replace(/\{\{\s*char\s*\}\}/gi, safeChar)
+    .replace(/\{\{\s*user\s*\}\}/gi, safeUser)
+    .replace(/<\s*BOT\s*>/gi, safeChar)
+    .replace(/<\s*USER\s*>/gi, safeUser);
+}
+
+/**
+ * Returns the raw (with {{char}} and {{user}} macros intact) and resolved
+ * scenario and mesExamples for a character, taking into account any per-character
+ * overrides saved in Response Behavior Director.
+ */
+export function getCharacterDefinitionFields(
+  char: Character,
+  userName: string = 'You'
+): {
+  rawScenario: string;
+  rawMesExamples: string;
+  resolvedScenario: string;
+  resolvedMesExamples: string;
+} {
+  const all = loadAllDirectives();
+  const specific = all[char.id];
+
+  const rawScenario =
+    (specific?.scenarioOverride !== undefined && specific.scenarioOverride.trim() !== ''
+      ? specific.scenarioOverride
+      : char.scenario) || '';
+
+  const rawMesExamples =
+    (specific?.mesExamplesOverride !== undefined && specific.mesExamplesOverride.trim() !== ''
+      ? specific.mesExamplesOverride
+      : char.mesExamples) || '';
+
+  return {
+    rawScenario,
+    rawMesExamples,
+    resolvedScenario: replaceCharacterMacros(rawScenario, char.name, userName),
+    resolvedMesExamples: replaceCharacterMacros(rawMesExamples, char.name, userName),
+  };
+}
+
+/**
+ * Builds the Character.ai Definition block (Scenario, Dialogue Examples with {{char}}/{{user}}
+ * replaced, and Roleplay Directives) to be injected into the Gemini systemInstruction.
+ */
+export function buildCharacterCaiDefinitionBlock(
+  char: Character,
+  userName: string = 'You'
+): string {
+  const { resolvedScenario, resolvedMesExamples } = getCharacterDefinitionFields(char, userName);
+  const sections: string[] = [];
+
+  if (resolvedScenario.trim()) {
+    sections.push(
+      `[CHARACTER.AI SCENARIO & CURRENT SETTING]:\n${resolvedScenario.trim()}`
+    );
+  }
+
+  if (resolvedMesExamples.trim()) {
+    sections.push(
+      `[CHARACTER.AI DIALOGUE EXAMPLES (mesExamples — VOICE, CADENCE & FORMATTING REFERENCE)]:\nThe following example exchanges demonstrate how ${char.name} speaks, acts in *asterisks*, and formats replies with ${userName}. Mirror this exact vocal personality, emotional rhythm, and roleplay style without repeating these example lines verbatim:\n${resolvedMesExamples.trim()}`
+    );
+  }
+
+  sections.push(
+    `[CHARACTER.AI ROLEPLAY & EXPRESSION DIRECTIVES]:\n- Adopt ${char.name}'s unmistakable voice, vocabulary, and emotional cadence as shown in the persona and dialogue examples above.\n- Weave expressive physical actions, micro-expressions, and environmental atmosphere in *asterisks* naturally alongside spoken dialogue.\n- Address ${userName} organically based on your current scenario and affinity tier.\n- Split multi-part thoughts into 1 to 3 natural message bubbles separated by " || ".`
+  );
+
+  return `\n\n${sections.join('\n\n')}`;
+}
+
+/**
  * Builds the additional prompt directive block injected into the character's system prompt
  */
-export function buildDirectivePromptBlock(charId: string): string {
+export function buildDirectivePromptBlock(
+  charId: string,
+  charName: string = 'Character',
+  userName: string = 'You'
+): string {
   const all = loadAllDirectives();
   const specific = all[charId];
   const globalDir = all['__global__'];
@@ -137,7 +225,8 @@ export function buildDirectivePromptBlock(charId: string): string {
     parts.push(`[ACTIVE TEXTING STYLE OVERRIDE - ${PACING_LABELS[active.pacing].label.toUpperCase()}]: ${PACING_LABELS[active.pacing].promptRule}`);
   }
   if (active.customInstruction && active.customInstruction.trim()) {
-    parts.push(`[LIVE DIRECTOR INSTRUCTION - MUST OBEY]: ${active.customInstruction.trim()}`);
+    const resolvedRule = replaceCharacterMacros(active.customInstruction.trim(), charName, userName);
+    parts.push(`[LIVE DIRECTOR INSTRUCTION - MUST OBEY]: ${resolvedRule}`);
   }
 
   if (parts.length === 0) return '';

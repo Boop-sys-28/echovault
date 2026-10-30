@@ -19,7 +19,7 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
   const [selectedPreset, setSelectedPreset] = useState<PhotoPreset | null>(PHOTO_PRESETS[0]);
   const [customImageUrl, setCustomImageUrl] = useState('');
   const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
-  const [caption, setCaption] = useState(PHOTO_PRESETS[0].caption);
+  const [caption, setCaption] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -37,9 +37,6 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         setUploadedImageBase64(reader.result);
-        if (!caption.trim()) {
-          setCaption('Sending you this photo! 📸');
-        }
       }
     };
     reader.readAsDataURL(file);
@@ -47,7 +44,6 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
 
   const handleSelectPreset = (preset: PhotoPreset) => {
     setSelectedPreset(preset);
-    setCaption(preset.caption);
   };
 
   const getEffectiveImageUrl = (): string => {
@@ -274,7 +270,7 @@ export const SharePhotoModal: React.FC<SharePhotoModalProps> = ({
               type="text"
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
-              placeholder={`Say something about this photo to ${character.name}...`}
+              placeholder="Add a note... (optional)"
               className="w-full bg-[#131622] border border-white/10 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition"
             />
           </div>

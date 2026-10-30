@@ -59,6 +59,9 @@ import {
   buildDirectivePromptBlock,
   processArchitectCommand,
   getCharacterDirective,
+  replaceCharacterMacros,
+  getCharacterDefinitionFields,
+  buildCharacterCaiDefinitionBlock,
 } from './utils/responseDirector';
 import {
   formatBubbleTimestamp,
@@ -264,8 +267,13 @@ export default function App() {
     const baseWithCounts = DEFAULT_CHARACTERS.map(c => {
       const count = typeof savedUserCounts[c.id] === 'number' ? savedUserCounts[c.id] : (c.userCount ?? 1200);
       savedUserCounts[c.id] = count;
+      const resolvedAvatar = resolveAvatarUrl(c.avatarUrl || c.avatar, c.id);
+      const resolvedStory = c.storyImg ? resolveAvatarUrl(c.storyImg, c.id) : resolvedAvatar;
       return {
         ...c,
+        avatar: resolvedAvatar,
+        avatarUrl: resolvedAvatar,
+        storyImg: resolvedStory,
         userCount: count,
         interactionCount: count,
       };
@@ -281,10 +289,12 @@ export default function App() {
           .filter(c => c && !defaultIds.has(c.id))
           .map(c => {
             const count = typeof savedUserCounts[c.id] === 'number' ? savedUserCounts[c.id] : (c.userCount ?? 850);
+            const resolvedAvatar = resolveAvatarUrl(c.avatarUrl || c.avatar, c.id);
             return {
               ...c,
-              avatar: resolveAvatarUrl(c.avatar, c.id),
-              storyImg: c.storyImg ? resolveAvatarUrl(c.storyImg, c.id) : undefined,
+              avatar: resolvedAvatar,
+              avatarUrl: resolvedAvatar,
+              storyImg: c.storyImg ? resolveAvatarUrl(c.storyImg, c.id) : resolvedAvatar,
               relationshipLevel: 0,
               affinity: 0,
               affection: 0,
@@ -427,6 +437,7 @@ export default function App() {
   const [hasServerAi, setHasServerAi] = useState<boolean>(false);
   const [apiErrorBanner, setApiErrorBanner] = useState<string | null>(null);
   const [lastFailedMessageText, setLastFailedMessageText] = useState<string | null>(null);
+  const [regeneratingMsgId, setRegeneratingMsgId] = useState<string | null>(null);
 
   // Followed Characters State (starts at 0 / empty so no character has pre-existing bond status)
   const [followedCharIds, setFollowedCharIds] = useState<string[]>([]);
@@ -932,6 +943,8 @@ export default function App() {
             id: `char-${bubbleTimestampMs}-${index}-${Math.random().toString(36).substring(2, 6)}`,
             sender: 'char',
             text: bubbleText,
+            variants: [bubbleText],
+            activeVariantIndex: 0,
             image: index === 0 ? options?.photoUrl : undefined,
             timestamp: bubbleTimestampMs,
             replyTo: index === 0 ? options?.replyTo : undefined,
@@ -967,30 +980,35 @@ export default function App() {
 
   /**
    * Builds the full character system instruction combining `system`, `systemInstruction`,
+   * Character.ai `scenario` & `mesExamples` (with {{char}} and {{user}} variable replacement),
    * live relationship score/tier context, Response Director overrides, AND all extracted
    * episodic memories from MemoryVaultModal / localStorage for the character.
    */
   const buildFullCharacterSystemPrompt = (char: Character, explicitMemories?: string[]): string => {
+    const userName = currentUser?.codename || currentUser?.username || 'You';
     const directive = getCharacterDirective(char.id);
-    const primarySystem = directive.systemOverride || char.system || char.systemInstruction || '';
-    const extraSystem =
+    const rawPrimarySystem = directive.systemOverride || char.system || char.systemInstruction || '';
+    const primarySystem = replaceCharacterMacros(rawPrimarySystem, char.name, userName);
+    const rawExtraSystem =
       !directive.systemOverride &&
       char.systemInstruction &&
       char.system &&
       !char.system.includes(char.systemInstruction)
         ? `\n\n[ADDITIONAL CANON LORE & CONTINUITY]:\n${char.systemInstruction}`
         : '';
+    const extraSystem = replaceCharacterMacros(rawExtraSystem, char.name, userName);
+    const caiDefinitionBlock = buildCharacterCaiDefinitionBlock(char, userName);
     const currentAffinity = relationshipLevels[char.id] ?? 0;
     const currentTier = getRelationshipTierFromAffinity(currentAffinity);
     const dynamicRelationshipBlock = `\n\n[CURRENT RELATIONSHIP & AFFINITY STATE]:
 - Current Affinity Score: ${currentAffinity} / 100 (Tier: ${currentTier}).
 - Baseline started at 0 (Stranger). Respond authentically according to this ${currentTier} relationship tier and your canon personality.`;
-    const directiveBlock = buildDirectivePromptBlock(char.id);
+    const directiveBlock = buildDirectivePromptBlock(char.id, char.name, userName);
     const memoryVaultBlock = buildMemoryPromptBlock(
       char.id,
       explicitMemories ?? charMemories[char.id]
     );
-    return `${primarySystem}${extraSystem}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${memoryVaultBlock}${directiveBlock}`;
+    return `${primarySystem}${extraSystem}${caiDefinitionBlock}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${memoryVaultBlock}${directiveBlock}`;
   };
 
   /**
@@ -1086,10 +1104,16 @@ export default function App() {
       const customStoredKey = getExplicitCustomApiKey();
 
       const memories = getMergedCharacterMemories(char.id, charMemories[char.id]);
+      const userName = currentUser?.codename || currentUser?.username || 'You';
+      const defFields = getCharacterDefinitionFields(char, userName);
       const { ok, data } = await postChatWithBackoff(
         {
-          prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${currentUser?.codename || 'them'}. Send a spontaneous, natural check-in text or share something new happening on your end in your canon voice (current relationship/affinity level: ${currentRelLevel} - ${getRelationshipTierFromAffinity(currentRelLevel)}). Max 2 short bubbles separated by ' || '.`,
+          prompt: `[INBOUND_AWAY_CHECKIN]: Several hours have passed since you last heard from ${userName}. Send a spontaneous, natural check-in text or share something new happening on your end in your canon voice (current relationship/affinity level: ${currentRelLevel} - ${getRelationshipTierFromAffinity(currentRelLevel)}). Max 2 short bubbles separated by ' || '.`,
           systemInstruction: buildFullCharacterSystemPrompt(char, memories),
+          charName: char.name,
+          userName,
+          scenario: defFields.resolvedScenario,
+          mesExamples: defFields.resolvedMesExamples,
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -1296,10 +1320,16 @@ export default function App() {
         responderChar.id,
         charMemories[responderChar.id]
       );
+      const userName = currentUser?.codename || currentUser?.username || 'Operative_07';
+      const defFields = getCharacterDefinitionFields(responderChar, userName);
       const { ok, data } = await postChatWithBackoff(
         {
-          prompt: `[GROUP CHANNEL "${activeGroupRoom.name}"]: ${currentUser?.codename || 'Operative_07'} just said to the group: "${text.trim()}". Reply in-character as ${responderChar.name} in 1-2 short bubbles separated by ' || '.`,
+          prompt: `[GROUP CHANNEL "${activeGroupRoom.name}"]: ${userName} just said to the group: "${text.trim()}". Reply in-character as ${responderChar.name} in 1-2 short bubbles separated by ' || '.`,
           systemInstruction: buildFullCharacterSystemPrompt(responderChar, responderMemories),
+          charName: responderChar.name,
+          userName,
+          scenario: defFields.resolvedScenario,
+          mesExamples: defFields.resolvedMesExamples,
           memories: responderMemories.slice(0, 75),
           history: currentRoomHistory
             .filter(m => !m.isSystemDivider)
@@ -1468,10 +1498,17 @@ export default function App() {
         activeMemories
       );
 
+      const userName = currentUser?.codename || currentUser?.username || 'You';
+      const defFields = getCharacterDefinitionFields(activeChar, userName);
+
       const { ok, data } = await postChatWithBackoff(
         {
           prompt: promptPayload,
           systemInstruction: systemInstructionWithMemories,
+          charName: activeChar.name,
+          userName,
+          scenario: defFields.resolvedScenario,
+          mesExamples: defFields.resolvedMesExamples,
           memories: activeMemories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -1598,10 +1635,17 @@ export default function App() {
       const promptPayload = `[USER SENT YOU A PICTURE]: "${caption.trim() || 'Look at this photo I took!'}"`;
       const customStoredKey = getExplicitCustomApiKey();
 
+      const userName = currentUser?.codename || currentUser?.username || 'You';
+      const defFields = getCharacterDefinitionFields(activeChar, userName);
+
       const { ok, data } = await postChatWithBackoff(
         {
           prompt: promptPayload,
           systemInstruction: buildFullCharacterSystemPrompt(activeChar, memories),
+          charName: activeChar.name,
+          userName,
+          scenario: defFields.resolvedScenario,
+          mesExamples: defFields.resolvedMesExamples,
           memories: memories.slice(0, 75),
           history: historyContext.slice(-50).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
@@ -1850,6 +1894,161 @@ export default function App() {
     }
   };
 
+  // Swipe between existing character message variants (< 1/2 >)
+  const handleSwipeMessageVariant = (
+    charId: string,
+    msgId: string,
+    direction: 'prev' | 'next'
+  ) => {
+    const updateList = (list: Message[]) =>
+      list.map(m => {
+        if (m.id !== msgId) return m;
+        const variants = m.variants && m.variants.length > 0 ? m.variants : [m.text];
+        const currentIdx =
+          typeof m.activeVariantIndex === 'number'
+            ? Math.min(Math.max(0, m.activeVariantIndex), variants.length - 1)
+            : 0;
+        const nextIdx =
+          direction === 'prev'
+            ? Math.max(0, currentIdx - 1)
+            : Math.min(variants.length - 1, currentIdx + 1);
+        return {
+          ...m,
+          variants,
+          activeVariantIndex: nextIdx,
+          text: variants[nextIdx] ?? m.text,
+        };
+      });
+
+    if (burnerMode) {
+      setBurnerChats(prev => ({
+        ...prev,
+        [charId]: updateList(prev[charId] || []),
+      }));
+    } else {
+      setChats(prev => ({
+        ...prev,
+        [charId]: updateList(prev[charId] || []),
+      }));
+    }
+  };
+
+  // Generate a new alternate reply variant for a character message and swipe to it (< 2/2 >)
+  const handleRegenerateMessageVariant = async (charId: string, msgId: string) => {
+    if (regeneratingMsgId) return;
+    const char = characters.find(c => c.id === charId);
+    if (!char) return;
+
+    const currentList = (burnerMode ? burnerChats[charId] : chats[charId]) || [];
+    const targetIdx = currentList.findIndex(m => m.id === msgId);
+    if (targetIdx === -1) return;
+
+    const targetMsg = currentList[targetIdx];
+    const existingVariants =
+      targetMsg.variants && targetMsg.variants.length > 0
+        ? targetMsg.variants
+        : [targetMsg.text];
+
+    // Find the preceding user message to use as the prompt, and slice history before it
+    let promptText = 'Continue your reply in character with a fresh angle.';
+    let historyBeforePrompt = currentList.slice(0, targetIdx);
+
+    for (let i = targetIdx - 1; i >= 0; i--) {
+      if (currentList[i].sender === 'user') {
+        promptText = currentList[i].text;
+        if (currentList[i].replyTo) {
+          promptText = `[Replying directly to "${currentList[i].replyTo?.text}" from ${currentList[i].replyTo?.senderName}]: ${promptText}`;
+        }
+        historyBeforePrompt = currentList.slice(0, i);
+        break;
+      }
+    }
+
+    setRegeneratingMsgId(msgId);
+    setApiErrorBanner(null);
+
+    try {
+      const customStoredKey = getExplicitCustomApiKey();
+      const memories = getMergedCharacterMemories(char.id, charMemories[char.id]);
+      const userName = currentUser?.codename || currentUser?.username || 'You';
+      const defFields = getCharacterDefinitionFields(char, userName);
+      const systemInstructionWithMemories = buildFullCharacterSystemPrompt(char, memories);
+
+      const { ok, data } = await postChatWithBackoff(
+        {
+          prompt: promptText,
+          systemInstruction: systemInstructionWithMemories,
+          charName: char.name,
+          userName,
+          scenario: defFields.resolvedScenario,
+          mesExamples: defFields.resolvedMesExamples,
+          isRegenerate: true,
+          previousVariants: existingVariants,
+          memories: memories.slice(0, 75),
+          history: historyBeforePrompt.slice(-50).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          })),
+        },
+        customStoredKey
+      );
+
+      if (ok && data.text && String(data.text).trim()) {
+        let newVariantText = String(data.text).trim();
+        // Clean any photo drop tag if present
+        newVariantText = newVariantText.replace(/\[PHOTO_DROP:[^\]]+\]/g, '').trim();
+        // If multi-bubble delimiter '||' was returned, normalize spacing so it renders cleanly
+        const nextVariants = [...existingVariants, newVariantText];
+        const nextIdx = nextVariants.length - 1;
+
+        playMessageReceivedSound();
+
+        const applyVariant = (list: Message[]) =>
+          list.map(m =>
+            m.id === msgId
+              ? {
+                  ...m,
+                  variants: nextVariants,
+                  activeVariantIndex: nextIdx,
+                  text: newVariantText,
+                  timestamp: Date.now(),
+                }
+              : m
+          );
+
+        if (burnerMode) {
+          setBurnerChats(prev => ({
+            ...prev,
+            [charId]: applyVariant(prev[charId] || []),
+          }));
+        } else {
+          setChats(prev => ({
+            ...prev,
+            [charId]: applyVariant(prev[charId] || []),
+          }));
+        }
+      } else {
+        setApiErrorBanner(
+          data?.message || data?.error || '⚠️ Failed to generate new reply variant. Please retry.'
+        );
+      }
+    } catch {
+      setApiErrorBanner('⚠️ Network error while generating reply variant.');
+    } finally {
+      setRegeneratingMsgId(null);
+    }
+  };
+
+  // Update character card definition fields (system, scenario, mesExamples) in state
+  const handleUpdateCharacterDefinitions = (
+    charId: string,
+    updates: { system?: string; scenario?: string; mesExamples?: string }
+  ) => {
+    setCharacters(prev =>
+      prev.map(c => (c.id === charId ? { ...c, ...updates } : c))
+    );
+  };
+
   const activeTheme = THEME_DEFINITIONS[themeConfig.themeId] || THEME_DEFINITIONS.cyberpunk;
 
   // Lookup group room info for activeChar if they belong to a preset group room
@@ -1951,6 +2150,8 @@ export default function App() {
       <PromptSpecModal
         isOpen={promptSpecModalOpen}
         character={activeChar}
+        userCodename={currentUser.codename || currentUser.username || 'You'}
+        onUpdateCharacterDefinitions={handleUpdateCharacterDefinitions}
         onClose={() => setPromptSpecModalOpen(false)}
       />
 
@@ -2153,6 +2354,13 @@ export default function App() {
         onClearChat={() => activeChar && handleClearActiveChatMessages(activeChar.id)}
         onDeleteChat={() => activeChar && handleDeleteChat(activeChar.id)}
         onDeleteMessage={(msgId) => activeChar && handleDeleteMessage(activeChar.id, msgId)}
+        regeneratingMsgId={regeneratingMsgId}
+        onSwipeMessageVariant={(msgId, dir) =>
+          activeChar && handleSwipeMessageVariant(activeChar.id, msgId, dir)
+        }
+        onRegenerateMessageVariant={(msgId) =>
+          activeChar && handleRegenerateMessageVariant(activeChar.id, msgId)
+        }
         isFollowed={activeChar ? followedCharIds.includes(activeChar.id) : true}
         isStoryViewed={activeChar ? viewedStoryIds.includes(activeChar.id) : false}
         memoriesCount={

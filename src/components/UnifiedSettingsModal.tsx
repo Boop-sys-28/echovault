@@ -47,6 +47,8 @@ import {
   getCharacterDirective,
   setCharacterDirective,
   saveAllDirectives,
+  replaceCharacterMacros,
+  getCharacterDefinitionFields,
 } from '../utils/responseDirector';
 import {
   GlobalTypingSpeedPreset,
@@ -61,6 +63,7 @@ import {
   MAX_ACTIVE_MEMORIES,
 } from '../utils/memory';
 import { PWAInstallButton } from './PWAInstallButton';
+import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
 
 export type SettingsTabId =
   | 'account'
@@ -206,10 +209,13 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   const [typingPreset, setTypingPreset] = useState<GlobalTypingSpeedPreset>(() =>
     getGlobalTypingSpeedPreset()
   );
-  const [selectedTargetChar, setSelectedTargetChar] = useState<string>('__global__');
+  const [selectedTargetChar, setSelectedTargetChar] = useState<string>('gojo');
   const [dirMood, setDirMood] = useState<ResponseMood>('canon');
   const [dirPacing, setDirPacing] = useState<ResponsePacing>('natural');
   const [dirCustomRule, setDirCustomRule] = useState<string>('');
+  const [dirScenario, setDirScenario] = useState<string>('');
+  const [dirMesExamples, setDirMesExamples] = useState<string>('');
+  const [showDirMacroPreview, setShowDirMacroPreview] = useState<boolean>(false);
   const [aiSavedToast, setAiSavedToast] = useState(false);
   const [checkingEngine, setCheckingEngine] = useState(false);
 
@@ -235,7 +241,20 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
     setDirMood(currentDir.mood);
     setDirPacing(currentDir.pacing);
     setDirCustomRule(currentDir.customInstruction || '');
-  }, [isOpen, selectedTargetChar]);
+
+    const targetCharObj = characters.find(c => c.id === selectedTargetChar);
+    if (targetCharObj) {
+      const { rawScenario, rawMesExamples } = getCharacterDefinitionFields(
+        targetCharObj,
+        userProfile.codename || 'You'
+      );
+      setDirScenario(rawScenario);
+      setDirMesExamples(rawMesExamples);
+    } else {
+      setDirScenario(currentDir.scenarioOverride || '');
+      setDirMesExamples(currentDir.mesExamplesOverride || '');
+    }
+  }, [isOpen, selectedTargetChar, characters, userProfile.codename]);
 
   // --- Tab 5: Storage & Memory Vault State ---
   const [storageRefreshTick, setStorageRefreshTick] = useState(0);
@@ -374,6 +393,8 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
       mood: dirMood,
       pacing: dirPacing,
       customInstruction: dirCustomRule.trim(),
+      scenarioOverride: dirScenario.trim(),
+      mesExamplesOverride: dirMesExamples.trim(),
     });
     setAiSavedToast(true);
     setTimeout(() => setAiSavedToast(false), 1800);
@@ -386,6 +407,9 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
     setDirMood('canon');
     setDirPacing('natural');
     setDirCustomRule('');
+    const targetCharObj = characters.find(c => c.id === selectedTargetChar);
+    setDirScenario(targetCharObj?.scenario || '');
+    setDirMesExamples(targetCharObj?.mesExamples || '');
     setAiSavedToast(true);
     setTimeout(() => setAiSavedToast(false), 1800);
   };
@@ -614,6 +638,8 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                     src={userProfile.avatarUrl}
                     alt={userProfile.codename}
                     referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    onError={(e) => handleAvatarImageError(e, userProfile.codename || 'Operative')}
                     className="w-8 h-8 rounded-full object-cover border border-purple-500/40 flex-shrink-0"
                   />
                 ) : (
@@ -660,6 +686,8 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                         src={userProfile.avatarUrl}
                         alt={userProfile.codename}
                         referrerPolicy="no-referrer"
+                        crossOrigin="anonymous"
+                        onError={(e) => handleAvatarImageError(e, userProfile.codename || 'Operative')}
                         className="w-14 h-14 rounded-2xl object-cover border border-purple-500/40 shadow-lg shadow-purple-600/25 flex-shrink-0"
                       />
                     ) : (
@@ -1077,8 +1105,11 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                     >
                       <div className="flex items-start gap-2 max-w-[88%]">
                         <img
-                          src={previewChar.avatar}
+                          src={resolveAvatarUrl(previewChar.avatarUrl || previewChar.avatar, previewChar.id)}
                           alt={previewChar.name}
+                          referrerPolicy="no-referrer"
+                          crossOrigin="anonymous"
+                          onError={(e) => handleAvatarImageError(e, previewChar.name, previewChar.themeAccent)}
                           className="w-6 h-6 rounded-full object-cover object-top border border-white/10 mt-1 flex-shrink-0"
                         />
                         <div
@@ -1549,15 +1580,139 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                   {/* Custom Live Instruction */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 block mb-1.5">
-                      Custom Director Prompt Rule (Optional)
+                      Custom Director Prompt Rule (Supports &#123;&#123;char&#125;&#125; &amp; &#123;&#123;user&#125;&#125;)
                     </label>
                     <input
                       type="text"
                       value={dirCustomRule}
                       onChange={e => setDirCustomRule(e.target.value)}
-                      placeholder="e.g., Always call me by my nickname and ask curious follow-up questions..."
+                      placeholder="e.g., {{char}} always calls {{user}} by a nickname and teases them..."
                       className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
                     />
+                  </div>
+
+                  {/* Character.ai Scenario (scenario) */}
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-[11px] font-semibold text-slate-300">
+                        Character.ai Scenario (scenario)
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDirScenario(
+                              prev => `${prev}${prev.endsWith(' ') || !prev ? '' : ' '}{{char}}`
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-mono text-purple-300 transition cursor-pointer"
+                        >
+                          + &#123;&#123;char&#125;&#125;
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDirScenario(
+                              prev => `${prev}${prev.endsWith(' ') || !prev ? '' : ' '}{{user}}`
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-mono text-cyan-300 transition cursor-pointer"
+                        >
+                          + &#123;&#123;user&#125;&#125;
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={dirScenario}
+                      onChange={e => setDirScenario(e.target.value)}
+                      rows={2}
+                      placeholder="Current setting and scenario context using {{char}} and {{user}}..."
+                      className="w-full bg-zinc-900 border border-white/10 rounded-xl p-3 font-mono text-[11px] text-white focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  {/* Character.ai Dialogue Examples (mesExamples) */}
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-[11px] font-semibold text-slate-300">
+                        Dialogue Examples (mesExamples)
+                      </label>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDirMesExamples(
+                              prev => `${prev ? `${prev.trimEnd()}\n` : ''}<START>\n{{user}}: \n{{char}}: `
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-mono text-emerald-300 transition cursor-pointer"
+                        >
+                          + &lt;START&gt;
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDirMesExamples(
+                              prev => `${prev}${prev.endsWith(' ') || prev.endsWith('\n') || !prev ? '' : ' '}{{char}}:`
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-mono text-purple-300 transition cursor-pointer"
+                        >
+                          + &#123;&#123;char&#125;&#125;:
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDirMesExamples(
+                              prev => `${prev}${prev.endsWith(' ') || prev.endsWith('\n') || !prev ? '' : ' '}{{user}}:`
+                            )
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-mono text-cyan-300 transition cursor-pointer"
+                        >
+                          + &#123;&#123;user&#125;&#125;:
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowDirMacroPreview(prev => !prev)}
+                          className="px-2 py-0.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-[10px] font-semibold text-purple-200 transition cursor-pointer"
+                        >
+                          {showDirMacroPreview ? 'Hide Preview' : 'Preview Resolved'}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={dirMesExamples}
+                      onChange={e => setDirMesExamples(e.target.value)}
+                      rows={4}
+                      placeholder={`<START>\n{{user}}: Hey, what's going on?\n{{char}}: *glances at the screen* Just taking five, {{user}}.`}
+                      className="w-full bg-zinc-900 border border-white/10 rounded-xl p-3 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-purple-500"
+                    />
+                    {showDirMacroPreview && (
+                      <div className="p-3 rounded-xl bg-black/50 border border-cyan-500/30 space-y-1.5 text-[11px] font-mono">
+                        <div className="text-[10px] uppercase tracking-wider text-cyan-300 font-sans font-semibold">
+                          Resolved Macro Output ({characters.find(c => c.id === selectedTargetChar)?.name || 'Character'} &amp; {userProfile.codename || 'You'})
+                        </div>
+                        {dirScenario && (
+                          <div className="text-slate-300">
+                            <span className="text-slate-500">Scenario: </span>
+                            {replaceCharacterMacros(
+                              dirScenario,
+                              characters.find(c => c.id === selectedTargetChar)?.name || 'Character',
+                              userProfile.codename || 'You'
+                            )}
+                          </div>
+                        )}
+                        {dirMesExamples && (
+                          <pre className="text-slate-200 whitespace-pre-wrap pt-1 border-t border-white/10">
+                            {replaceCharacterMacros(
+                              dirMesExamples,
+                              characters.find(c => c.id === selectedTargetChar)?.name || 'Character',
+                              userProfile.codename || 'You'
+                            )}
+                          </pre>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-white/10">
@@ -1760,8 +1915,11 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2.5">
                               <img
-                                src={char.avatar}
+                                src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                                 alt={char.name}
+                                referrerPolicy="no-referrer"
+                                crossOrigin="anonymous"
+                                onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                                 className="w-7 h-7 rounded-full object-cover object-top border border-white/10"
                               />
                               <div>

@@ -181,6 +181,7 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                     src={resolveAvatarUrl(char.avatarUrl || char.avatar, char.id)}
                     alt={char.name}
                     referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className="w-12 h-12 rounded-full shrink-0 object-cover object-top ring-2 ring-purple-500/30 bg-[#161a2b] group-hover:scale-105 transition"
                   />
@@ -206,6 +207,15 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
                   <p className="text-xs text-zinc-400 truncate block mt-0.5">
                     {char.tagline || char.status}
                   </p>
+                  {char.scenario && (
+                    <p
+                      className="text-[11px] text-purple-300/80 truncate block mt-0.5"
+                      title={char.scenario.replace(/\{\{char\}\}/gi, char.name).replace(/\{\{user\}\}/gi, 'You')}
+                    >
+                      <span className="text-purple-400 font-semibold">Scenario:</span>{' '}
+                      {char.scenario.replace(/\{\{char\}\}/gi, char.name).replace(/\{\{user\}\}/gi, 'You')}
+                    </p>
+                  )}
                   <p className="text-[11px] text-zinc-500 truncate block mt-0.5 flex items-center gap-1">
                     <span className="shrink-0">🎵</span>
                     <span className="truncate">{char.song}</span>

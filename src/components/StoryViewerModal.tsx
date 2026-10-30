@@ -76,6 +76,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
               referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-9 h-9 rounded-full object-cover object-top border border-white/40 shadow-sm bg-[#1a1e2e]"
             />
@@ -100,8 +101,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             src={resolveAvatarUrl(character.storyImg, character.id)}
             alt="Story Media"
             referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover object-top"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/40"></div>
 

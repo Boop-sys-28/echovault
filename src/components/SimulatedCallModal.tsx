@@ -30,6 +30,7 @@ export const SimulatedCallModal: React.FC<SimulatedCallModalProps> = ({
               src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
               alt={character.name}
               referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
               onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
               className="w-full h-full rounded-full object-cover object-top border-2 border-zinc-950 bg-[#1a1e2e]"
             />

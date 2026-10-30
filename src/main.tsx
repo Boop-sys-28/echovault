@@ -1,18 +1,21 @@
-import {createRoot} from 'react-dom/client';
-import {registerSW} from 'virtual:pwa-register';
-import App from './App.tsx';
 import './index.css';
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import App from './App.tsx';
 
-// Register PWA service worker with immediate update check
-registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    console.info('EchoVault update available');
-  },
-  onOfflineReady() {
-    console.info('EchoVault ready for offline operation');
-  },
-});
+// Purge any legacy service worker caches that may have cached stale HTML/CSS
+if ('caches' in window) {
+  caches
+    .keys()
+    .then((keys) => {
+      keys.forEach((key) => {
+        if (key !== 'echovault-v3') {
+          caches.delete(key);
+        }
+      });
+    })
+    .catch(() => {});
+}
 
 window.addEventListener('unhandledrejection', (event) => {
   const msg = String(event.reason?.message || event.reason || '');
@@ -25,3 +28,4 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 createRoot(document.getElementById('root')!).render(<App />);
+
