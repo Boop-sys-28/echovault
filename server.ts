@@ -539,7 +539,19 @@ async function startServer() {
 
   // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Zero Script Constraints)
   app.post('/api/chat', async (req, res) => {
-    const { prompt, systemInstruction, history, memories, apiKey: bodyApiKey } = req.body || {};
+    const {
+      prompt,
+      systemInstruction,
+      scenario,
+      mesExamples,
+      charName,
+      userName,
+      isRegenerate,
+      previousVariants,
+      history,
+      memories,
+      apiKey: bodyApiKey,
+    } = req.body || {};
     const headerKeyRaw = req.headers['x-gemini-api-key'];
     const headerApiKey =
       typeof headerKeyRaw === 'string'
@@ -628,7 +640,35 @@ async function startServer() {
           )
       : [];
 
-    const baseSystemStr = String(systemInstruction || '');
+    const resolvedCharName = String(charName || 'Character').trim();
+    const resolvedUserName = String(userName || 'You').trim();
+    const replaceServerMacros = (txt: string): string =>
+      txt
+        .replace(/\{\{\s*char\s*\}\}/gi, resolvedCharName)
+        .replace(/\{\{\s*user\s*\}\}/gi, resolvedUserName)
+        .replace(/<\s*BOT\s*>/gi, resolvedCharName)
+        .replace(/<\s*USER\s*>/gi, resolvedUserName);
+
+    const baseSystemStr = replaceServerMacros(String(systemInstruction || ''));
+    const resolvedScenarioStr =
+      typeof scenario === 'string' && scenario.trim()
+        ? replaceServerMacros(scenario.trim())
+        : '';
+    const resolvedMesExamplesStr =
+      typeof mesExamples === 'string' && mesExamples.trim()
+        ? replaceServerMacros(mesExamples.trim())
+        : '';
+
+    const extraScenarioSection =
+      resolvedScenarioStr && !baseSystemStr.includes(resolvedScenarioStr)
+        ? `\n\n[CHARACTER.AI SCENARIO & CURRENT SETTING]:\n${resolvedScenarioStr}`
+        : '';
+
+    const extraExamplesSection =
+      resolvedMesExamplesStr && !baseSystemStr.includes(resolvedMesExamplesStr)
+        ? `\n\n[CHARACTER.AI DIALOGUE EXAMPLES (mesExamples — VOICE, CADENCE & FORMATTING REFERENCE)]:\n${resolvedMesExamplesStr}`
+        : '';
+
     const missingMemories = cleanMemories.filter(
       (m: string) => !baseSystemStr.toLowerCase().includes(m.toLowerCase())
     );
@@ -641,18 +681,32 @@ async function startServer() {
             .join('\n')}`
         : '';
 
+    const prevVariantsList = Array.isArray(previousVariants)
+      ? previousVariants.map((v: unknown) => String(v).trim()).filter(Boolean)
+      : [];
+    const regenerateDirective = isRegenerate
+      ? `\n\n[MULTI-VARIANT SWIPE REGENERATION DIRECTIVE]:\nThe user swiped to generate a NEW alternative reply variant for this turn. Take a fresh, distinct emotional angle, action beat, or conversational phrasing in ${resolvedCharName}'s canon voice.${
+          prevVariantsList.length > 0
+            ? ` Do NOT repeat these previous variant replies:\n${prevVariantsList
+                .slice(-3)
+                .map((v, i) => `Variant ${i + 1}: "${v}"`)
+                .join('\n')}`
+            : ''
+        }`
+      : '';
+
     const unconstrainedCaiDirective = `\n\n[UNCONSTRAINED CHARACTER.AI ROLEPLAY & EXPRESSION ENGINE]:
 - RELATIONSHIP & AFFINITY PROGRESSION: All characters start at baseline 0 (Stranger / Neutral new contact) with zero pre-existing romance, pet names, or assumed intimacy. Respect the current Relationship/Affinity score and Tier provided in the system instruction—stay guarded/neutral at 0 (Stranger), hostile if negative (Enemy), and warm up organically as affinity rises (Acquaintance -> Trusted -> Close -> Devoted).
 - HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E7 "RETURN TO LOO LOO LAND" & "YES/NO"): If you are a Helluva Boss character (Loona, Blitzø, Stolas, Fizzarolli, Barbie Wire, Millie, Moxxie, Vassago, Octavia, or Verosika), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–7: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), S3E6 "Return to Loo Loo Land" (Blitzø and Fizzarolli revisiting the ruins of Loo Loo Land together to confront circus-era trauma while Loona recovers from her Sloth Ring rehab/hospital stint), and S3E7 "YES/NO" (Blitzø's estranged twin sister Barbie Wire barging into the I.M.P. office demanding work while holding firm boundaries against his apologies, Moxxie drafting her waivers, Millie and Loona watching the family tension unfold, Vassago spilling post-auction court tea as the Goetia council fractures, and Stolas and Blitzø wrestling with the emotional "YES/NO" relationship dilemma).
 - ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.
-- DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages.
+- DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages, matching your Character.ai dialogue examples (mesExamples).
 - MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
 
-    const fullSystemInstruction = `${baseSystemStr}${memorySection}${unconstrainedCaiDirective}`;
+    const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${unconstrainedCaiDirective}`;
 
     const generationConfig = {
       systemInstruction: fullSystemInstruction,
-      temperature: 1.0,
+      temperature: isRegenerate ? 1.08 : 1.0,
       topP: 0.95,
     };
 
@@ -812,14 +866,47 @@ async function startServer() {
   });
 
   const distPath = path.join(process.cwd(), 'dist');
+  const distAssetsPath = path.join(distPath, 'assets');
   const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
-  const isDevLifecycle = process.env.npm_lifecycle_event === 'dev';
+  const isRunningViaTsx =
+    process.argv.some((arg) => arg.includes('tsx') || arg.endsWith('server.ts')) &&
+    process.env.NODE_ENV !== 'production' &&
+    process.env.npm_lifecycle_event !== 'start';
   const isProduction =
-    process.env.NODE_ENV === 'production' ||
-    Boolean(process.env.K_SERVICE) ||
-    Boolean(process.env.K_REVISION) ||
-    process.env.npm_lifecycle_event === 'start' ||
-    (!isDevLifecycle && hasBuiltDist);
+    !isRunningViaTsx &&
+    (process.env.NODE_ENV === 'production' ||
+      Boolean(process.env.K_SERVICE) ||
+      Boolean(process.env.K_REVISION) ||
+      process.env.npm_lifecycle_event === 'start');
+
+  // Serve built /assets/* if requested by a cached HTML shell, falling back to latest CSS/JS bundle if hash changed
+  app.use('/assets', (req, res, next) => {
+    if (!fs.existsSync(distAssetsPath)) {
+      return next();
+    }
+    const requestedFile = path.basename(req.path);
+    const exactPath = path.join(distAssetsPath, requestedFile);
+    if (fs.existsSync(exactPath)) {
+      return res.sendFile(exactPath);
+    }
+    if (requestedFile.endsWith('.css')) {
+      const cssFile = fs.readdirSync(distAssetsPath).find((f) => f.endsWith('.css'));
+      if (cssFile) {
+        res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        return res.sendFile(path.join(distAssetsPath, cssFile));
+      }
+    }
+    if (requestedFile.endsWith('.js') && requestedFile.startsWith('index-')) {
+      const jsFile = fs
+        .readdirSync(distAssetsPath)
+        .find((f) => f.startsWith('index-') && f.endsWith('.js'));
+      if (jsFile) {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        return res.sendFile(path.join(distAssetsPath, jsFile));
+      }
+    }
+    return next();
+  });
 
   if (!isProduction || !hasBuiltDist) {
     try {
