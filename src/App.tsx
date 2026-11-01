@@ -1970,6 +1970,7 @@ export default function App() {
       const { ok, data } = await postChatWithBackoff(
         {
           prompt: promptPayload,
+          image: imageUrl,
           systemInstruction: buildFullCharacterSystemPrompt(activeChar, memories),
           charName: activeChar.name,
           userName,
@@ -1990,12 +1991,12 @@ export default function App() {
         if (!hasServerAi) setHasServerAi(true);
       } else {
         setIsTyping(false);
-        setApiErrorBanner(data?.message || data?.error || '⚠️ Gemini API quota / connection error');
+        setApiErrorBanner(data?.message || data?.error || '⚠️ Groq API quota / connection error');
         return;
       }
     } catch {
       setIsTyping(false);
-      setApiErrorBanner('⚠️ Gemini API quota / connection error');
+      setApiErrorBanner('⚠️ Groq API quota / connection error');
       return;
     }
 
@@ -2320,6 +2321,7 @@ export default function App() {
         const { ok, data } = await postChatWithBackoff(
           {
             prompt: promptPayload,
+            image: targetMsg.image,
             systemInstruction: systemInstructionWithMemories,
             charName: char.name,
             userName,
@@ -2461,12 +2463,16 @@ export default function App() {
 
     // Find the preceding user message to use as the prompt, and slice history before it
     let promptText = 'Continue your reply in character with a fresh angle.';
+    let promptImage: string | undefined;
     let historyBeforePrompt = currentList.slice(0, targetIdx);
 
     for (let i = targetIdx - 1; i >= 0; i--) {
       if (currentList[i].sender === 'user') {
         promptText = currentList[i].text;
-        if (currentList[i].replyTo) {
+        promptImage = currentList[i].image;
+        if (promptImage) {
+          promptText = `[USER SENT YOU A PICTURE]: "${promptText || 'Look at this photo I took!'}"`;
+        } else if (currentList[i].replyTo) {
           promptText = `[Replying directly to "${currentList[i].replyTo?.text}" from ${currentList[i].replyTo?.senderName}]: ${promptText}`;
         }
         historyBeforePrompt = currentList.slice(0, i);
@@ -2487,6 +2493,7 @@ export default function App() {
       const { ok, data } = await postChatWithBackoff(
         {
           prompt: promptText,
+          image: promptImage,
           systemInstruction: systemInstructionWithMemories,
           charName: char.name,
           userName,

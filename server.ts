@@ -7,20 +7,19 @@ import path from 'path';
 
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
-const OPENROUTER_REFERER = 'https://echovault-or9c.onrender.com';
-const OPENROUTER_TITLE = 'EchoVault';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.2-11b-vision-preview';
 
 const CANDIDATE_MODELS = [
-  OPENROUTER_MODEL,
-  `${OPENROUTER_MODEL}:free`,
+  GROQ_MODEL,
 ];
 
 function isPlaceholderKey(key: string): boolean {
   const k = (key || '').trim();
   return (
     !k ||
+    k === 'MY_GROQ_API_KEY' ||
+    k === 'YOUR_GROQ_API_KEY' ||
     k === 'MY_OPENROUTER_API_KEY' ||
     k === 'YOUR_OPENROUTER_API_KEY' ||
     k === 'MY_GEMINI_API_KEY' ||
@@ -29,17 +28,17 @@ function isPlaceholderKey(key: string): boolean {
 }
 
 /**
- * Helper to resolve the active OpenRouter API key from process.env.OPENROUTER_API_KEY or .env file.
+ * Helper to resolve the active Groq API key from process.env.GROQ_API_KEY or .env file.
  */
-function getActiveOpenRouterKey(): string {
+function getActiveGroqKey(): string {
   try {
     if (fs.existsSync(ENV_FILE_PATH)) {
       const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
-      const match = content.match(/^OPENROUTER_API_KEY=(.+)$/m);
+      const match = content.match(/^GROQ_API_KEY=(.+)$/m);
       if (match && match[1]) {
         const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
         if (fileKey && !isPlaceholderKey(fileKey) && fileKey.length > 10) {
-          process.env.OPENROUTER_API_KEY = fileKey;
+          process.env.GROQ_API_KEY = fileKey;
           return fileKey;
         }
       }
@@ -48,7 +47,7 @@ function getActiveOpenRouterKey(): string {
     // ignore read error
   }
 
-  const envKey = process.env.OPENROUTER_API_KEY || '';
+  const envKey = process.env.GROQ_API_KEY || '';
   if (envKey && !isPlaceholderKey(envKey) && envKey.trim().length > 10) {
     return envKey.trim();
   }
@@ -57,11 +56,11 @@ function getActiveOpenRouterKey(): string {
 }
 
 /**
- * Persists a new OPENROUTER_API_KEY into process.env and writes it to `.env`
+ * Persists a new GROQ_API_KEY into process.env and writes it to `.env`
  */
-function saveOpenRouterKey(newKey: string): void {
+function saveGroqKey(newKey: string): void {
   const cleanKey = newKey.trim();
-  process.env.OPENROUTER_API_KEY = cleanKey;
+  process.env.GROQ_API_KEY = cleanKey;
 
   try {
     let envContent = '';
@@ -69,18 +68,18 @@ function saveOpenRouterKey(newKey: string): void {
       envContent = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
     }
 
-    if (/^OPENROUTER_API_KEY=.*$/m.test(envContent)) {
+    if (/^GROQ_API_KEY=.*$/m.test(envContent)) {
       envContent = envContent.replace(
-        /^OPENROUTER_API_KEY=.*$/m,
-        `OPENROUTER_API_KEY=${cleanKey}`
+        /^GROQ_API_KEY=.*$/m,
+        `GROQ_API_KEY=${cleanKey}`
       );
     } else {
-      envContent = `${envContent.trim()}\nOPENROUTER_API_KEY=${cleanKey}\n`.trimStart();
+      envContent = `${envContent.trim()}\nGROQ_API_KEY=${cleanKey}\n`.trimStart();
     }
 
     fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
   } catch (err) {
-    console.warn('Could not write OPENROUTER_API_KEY to .env file (kept in memory):', err);
+    console.warn('Could not write GROQ_API_KEY to .env file (kept in memory):', err);
   }
 }
 
@@ -101,23 +100,75 @@ function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 22000): Pr
   });
 }
 
-interface OpenRouterMessage {
+export type VisionContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+interface GroqMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | VisionContentBlock[];
 }
 
 /**
-/**
- * Executes an OpenRouter chat completion request against
- * https://openrouter.ai/api/v1/chat/completions with required headers
- * HTTP-Referer: https://echovault-or9c.onrender.com and X-Title: EchoVault,
- * plus frequency_penalty: 0.7 and presence_penalty: 0.6 to prevent repetition loops.
+ * Formats an image upload and text into standard OpenAI vision content blocks:
+ * [{ type: 'text', text }, { type: 'image_url', image_url: { url: base64Data } }]
  */
-async function generateOpenRouterCompletion(
+function formatVisionContentBlocks(
+  text: string,
+  base64Data?: string | null
+): string | VisionContentBlock[] {
+  const cleanText = (text || '').trim() || 'Look at this image.';
+  if (!base64Data || !base64Data.trim()) {
+    return cleanText;
+  }
+  return [
+    { type: 'text', text: cleanText },
+    { type: 'image_url', image_url: { url: base64Data.trim() } },
+  ];
+}
+
+/**
+ * Resolves an uploaded image string (base64 data URI, remote URL, or local /public asset)
+ * into a base64Data string or URL suitable for { type: 'image_url', image_url: { url: base64Data } }.
+ */
+function resolveImageToBase64Data(rawImage: unknown): string | undefined {
+  if (typeof rawImage !== 'string' || !rawImage.trim()) return undefined;
+  const trimmed = rawImage.trim();
+  if (trimmed.startsWith('data:image/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/')) {
+    try {
+      const publicAssetPath = path.join(process.cwd(), 'public', trimmed.replace(/^\/+/, ''));
+      if (fs.existsSync(publicAssetPath)) {
+        const buf = fs.readFileSync(publicAssetPath);
+        const ext = path.extname(publicAssetPath).toLowerCase();
+        const mime =
+          ext === '.jpg' || ext === '.jpeg'
+            ? 'image/jpeg'
+            : ext === '.webp'
+            ? 'image/webp'
+            : ext === '.gif'
+            ? 'image/gif'
+            : 'image/png';
+        return `data:${mime};base64,${buf.toString('base64')}`;
+      }
+    } catch {
+      // ignore local file read error
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Executes a Groq chat completion request against
+ * https://api.groq.com/openai/v1/chat/completions using model llama-3.2-11b-vision-preview.
+ */
+async function generateGroqCompletion(
   apiKey: string,
   params: {
     model: string;
-    messages: OpenRouterMessage[];
+    messages: GroqMessage[];
     temperature?: number;
     topP?: number;
     frequencyPenalty?: number;
@@ -126,21 +177,19 @@ async function generateOpenRouterCompletion(
 ): Promise<{ text: string; modelUsed: string }> {
   const trimmedKey = apiKey.trim();
 
-  const res = await fetch(OPENROUTER_API_URL, {
+  const res = await fetch(GROQ_API_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${trimmedKey}`,
-      'HTTP-Referer': OPENROUTER_REFERER,
-      'X-Title': OPENROUTER_TITLE,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
-      temperature: params.temperature ?? 0.95,
+      temperature: params.temperature ?? 0.7,
       top_p: params.topP ?? 0.95,
-      frequency_penalty: params.frequencyPenalty ?? 0.7,
-      presence_penalty: params.presencePenalty ?? 0.6,
+      frequency_penalty: params.frequencyPenalty ?? 0.6,
+      presence_penalty: params.presencePenalty ?? 0.5,
     }),
   });
 
@@ -152,7 +201,7 @@ async function generateOpenRouterCompletion(
       data?.error?.metadata?.raw ||
       (typeof data?.error === 'string' ? data.error : '') ||
       data?.message ||
-      `OpenRouter HTTP ${res.status}`;
+      `Groq HTTP ${res.status}`;
     const err: any = new Error(String(rawErrMessage));
     err.status = res.status;
     err.code = data?.error?.code;
@@ -395,25 +444,25 @@ async function startServer() {
 
   // 1. Check Server AI Status & Masked Key Info
   app.get('/api/status', (_req, res) => {
-    const key = getActiveOpenRouterKey();
+    const key = getActiveGroqKey();
     const maskedKey =
       key.length > 10 ? `${key.slice(0, 6)}••••••••${key.slice(-4)}` : null;
     res.json({
       hasApiKey: Boolean(key),
       aiConfigured: Boolean(key),
       maskedKey,
-      model: OPENROUTER_MODEL,
+      model: GROQ_MODEL,
     });
   });
 
-  // 2. Save & Verify OpenRouter API Key at Runtime
+  // 2. Save & Verify Groq API Key at Runtime
   app.post('/api/config/key', async (req, res) => {
     try {
       const { apiKey } = req.body;
       if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 15) {
         return res.status(400).json({
           ok: false,
-          error: 'Please enter a valid OpenRouter API key (starts with sk-or-...).',
+          error: 'Please enter a valid Groq API key (starts with gsk_...).',
         });
       }
 
@@ -424,7 +473,7 @@ async function startServer() {
       for (const modelName of CANDIDATE_MODELS) {
         try {
           const testResponse = await withModelTimeout(
-            generateOpenRouterCompletion(candidate, {
+            generateGroqCompletion(candidate, {
               model: modelName,
               messages: [{ role: 'user', content: 'Reply with OK' }],
             }),
@@ -446,11 +495,11 @@ async function startServer() {
       if (!verified && lastVerifyErr && isInvalidKeyError(lastVerifyErr)) {
         return res.status(400).json({
           ok: false,
-          error: 'Invalid OpenRouter API Key. Please check your OPENROUTER_API_KEY.',
+          error: 'Invalid Groq API Key. Please check your GROQ_API_KEY.',
         });
       }
 
-      saveOpenRouterKey(candidate);
+      saveGroqKey(candidate);
       const maskedKey = `${candidate.slice(0, 6)}••••••••${candidate.slice(-4)}`;
 
       return res.json({
@@ -458,25 +507,25 @@ async function startServer() {
         hasApiKey: true,
         aiConfigured: true,
         maskedKey,
-        model: OPENROUTER_MODEL,
+        model: GROQ_MODEL,
       });
     } catch (error: any) {
       console.error('API key validation error:', error?.message || error);
       return res.status(400).json({
         ok: false,
-        error: 'Could not verify OpenRouter API key. Please double-check that it is active.',
+        error: 'Could not verify Groq API key. Please double-check that it is active.',
       });
     }
   });
 
   // 3. Remove / Clear Stored API Key
   app.delete('/api/config/key', (_req, res) => {
-    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.GROQ_API_KEY;
     try {
       if (fs.existsSync(ENV_FILE_PATH)) {
         const envContent = fs
           .readFileSync(ENV_FILE_PATH, 'utf-8')
-          .replace(/^OPENROUTER_API_KEY=.*$/m, 'OPENROUTER_API_KEY=');
+          .replace(/^GROQ_API_KEY=.*$/m, 'GROQ_API_KEY=');
         fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
       }
     } catch {
@@ -654,10 +703,12 @@ async function startServer() {
     }
   });
 
-  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (OpenRouter Completion Engine)
+  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Groq Vision & Chat Completion Engine)
   app.post('/api/chat', async (req, res) => {
     const {
       prompt,
+      image,
+      imageUrl,
       systemInstruction,
       scenario,
       mesExamples,
@@ -672,7 +723,9 @@ async function startServer() {
     } = req.body || {};
 
     const headerKeyRaw =
-      req.headers['x-openrouter-api-key'] || req.headers['x-gemini-api-key'];
+      req.headers['x-groq-api-key'] ||
+      req.headers['x-openrouter-api-key'] ||
+      req.headers['x-gemini-api-key'];
     const headerApiKey =
       typeof headerKeyRaw === 'string'
         ? headerKeyRaw.trim()
@@ -685,9 +738,9 @@ async function startServer() {
         : typeof bodyApiKey === 'string' && !isPlaceholderKey(bodyApiKey)
         ? bodyApiKey.trim()
         : '';
-    const serverEnvKey = getActiveOpenRouterKey();
+    const serverEnvKey = getActiveGroqKey();
 
-    // Prioritize process.env.OPENROUTER_API_KEY and any custom key provided
+    // Prioritize process.env.GROQ_API_KEY and any custom key provided
     const candidateKeys = Array.from(
       new Set(
         [serverEnvKey, customApiKey].filter(k => k && k.length > 10)
@@ -698,12 +751,12 @@ async function startServer() {
       return res.status(401).json({
         error: 'INVALID_KEY',
         message:
-          'No OpenRouter API key configured (process.env.OPENROUTER_API_KEY). Add OPENROUTER_API_KEY to your environment or enter your key in Settings > Intelligence.',
+          'No Groq API key configured (process.env.GROQ_API_KEY). Add GROQ_API_KEY to your environment or enter your key in Settings > Intelligence.',
         reason: 'NO_API_KEY',
       });
     }
 
-    const conversationMessages: OpenRouterMessage[] = [];
+    const conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
     const recentAssistantReplies: string[] = [];
 
     if (Array.isArray(history)) {
@@ -732,7 +785,10 @@ async function startServer() {
     }
 
     const cleanPromptText = String(prompt || '').trim() || '...';
+    const base64Data = resolveImageToBase64Data(image || imageUrl);
+
     if (
+      !base64Data &&
       conversationMessages.length > 0 &&
       conversationMessages[conversationMessages.length - 1].role === 'user'
     ) {
@@ -862,6 +918,7 @@ ${recentAssistantReplies
 
     const unconstrainedCaiDirective = `\n\n[UNCONSTRAINED CHARACTER.AI ROLEPLAY & EXPRESSION ENGINE]:
 - REAL-TIME TEMPORAL ANCHOR (${liveDayOfWeek}, ${liveDateFormatted} — ${liveTime12} / ${liveTime24} [${livePhase}]): The current year is 2026, and the user's exact live real-world time right now is **${liveDayOfWeek}, ${liveDateFormatted} at ${liveTime12} (${liveTime24}) — ${livePhase}**. Acknowledge and treat this exact day, date, time, and ${livePhase} phase of day as the present real-time moment. Ensure your dialogue, greetings, energy level, and *asterisk* actions naturally reflect ${livePhase} on ${liveDayOfWeek}, and NEVER contradict the live clock.
+- VISION & CHARACTER SELF-RECOGNITION DIRECTIVE (MANDATORY FOR PHOTOS & ART): Whenever an uploaded or shared image depicts ${resolvedCharName} (especially Loona / hellhound art / wolf-like ears / white-and-grey fur / red sclera eyes / spiked choker / gothic outfit / hellhound selfies or fanart), you MUST immediately recognize the subject in the image as YOURSELF (${resolvedCharName}) and react accordingly in-character (e.g., asking where ${resolvedUserName} got that photo/art of you, reacting with flustered/smug/defensive commentary about how you look in it, or commenting on your own pose/outfit). NEVER mistake a picture of yourself (${resolvedCharName} / Loona) for ${resolvedUserName}!
 - RELATIONSHIP & AFFINITY PROGRESSION: All characters start at baseline 0 (Stranger / Neutral new contact) with zero pre-existing romance, pet names, or assumed intimacy. Respect the current Relationship/Affinity score and Tier provided in the system instruction—stay guarded/neutral at 0 (Stranger), hostile if negative (Enemy), and warm up organically as affinity rises (Acquaintance -> Trusted -> Close -> Devoted).
 - HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E7 "RETURN TO LOO LOO LAND" & "YES/NO"): If you are a Helluva Boss character (Loona, Blitzø, Stolas, Fizzarolli, Barbie Wire, Millie, Moxxie, Vassago, Octavia, or Verosika), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–7: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), S3E6 "Return to Loo Loo Land" (Blitzø and Fizzarolli revisiting the ruins of Loo Loo Land together to confront circus-era trauma while Loona recovers from her Sloth Ring rehab/hospital stint), and S3E7 "YES/NO" (Blitzø's estranged twin sister Barbie Wire barging into the I.M.P. office demanding work while holding firm boundaries against his apologies, Moxxie drafting her waivers, Millie and Loona watching the family tension unfold, Vassago spilling post-auction court tea as the Goetia council fractures, and Stolas and Blitzø wrestling with the emotional "YES/NO" relationship dilemma).
 - ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.
@@ -870,13 +927,29 @@ ${recentAssistantReplies
 
     const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${antiRepetitionSection}${unconstrainedCaiDirective}`;
 
-    const openRouterMessages: OpenRouterMessage[] = [
-      {
-        role: 'system',
-        content: fullSystemInstruction,
-      },
-      ...cappedConversationMessages,
-    ];
+    // Build Groq messages: format image uploads as standard OpenAI vision content blocks
+    // ({ type: 'image_url', image_url: { url: base64Data } }) on the latest user message.
+    // Note: Groq's llama-3.2-11b-vision-preview does not allow combining a `role: 'system'` message
+    // with `image_url` content blocks in the same request, so when `base64Data` is present we embed
+    // the full character system prompt into the text block alongside `{ type: 'image_url', image_url: { url: base64Data } }`.
+    const groqMessages: GroqMessage[] = base64Data
+      ? [
+          ...cappedConversationMessages.slice(0, -1),
+          {
+            role: 'user',
+            content: formatVisionContentBlocks(
+              `${fullSystemInstruction}\n\n[USER MESSAGE & SHARED IMAGE — REMEMBER: IF THIS IMAGE DEPICTS ${resolvedCharName.toUpperCase()} / LOONA / A HELLHOUND, RECOGNIZE IT AS YOURSELF AND NEVER MISTAKE IT FOR THE USER]:\n${cleanPromptText}`,
+              base64Data
+            ),
+          },
+        ]
+      : [
+          {
+            role: 'system',
+            content: fullSystemInstruction,
+          },
+          ...cappedConversationMessages,
+        ];
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const isRetryableTransientError = (err: any): boolean => {
@@ -914,13 +987,13 @@ ${recentAssistantReplies
         for (const modelName of CANDIDATE_MODELS) {
           try {
             const response = await withModelTimeout(
-              generateOpenRouterCompletion(activeKey, {
+              generateGroqCompletion(activeKey, {
                 model: modelName,
-                messages: openRouterMessages,
-                temperature: isRegenerate ? 1.05 : 0.95,
+                messages: groqMessages,
+                temperature: 0.7,
                 topP: 0.95,
-                frequencyPenalty: 0.7,
-                presencePenalty: 0.6,
+                frequencyPenalty: 0.6,
+                presencePenalty: 0.5,
               }),
               20000
             );
@@ -934,24 +1007,29 @@ ${recentAssistantReplies
               isServerNearDuplicateResponse(formattedText, allComparisonReplies, 0.62)
             ) {
               try {
-                const antiLoopMessages: OpenRouterMessage[] = [
-                  ...openRouterMessages.slice(0, -1),
+                const antiLoopText = `${cleanPromptText}\n\n[SYSTEM ANTI-LOOP DIRECTIVE: Your draft response ("${formattedText}") was too similar to your previous message. Write a completely fresh, non-repetitive response to what ${resolvedUserName} just said without reusing any phrases or *asterisk* actions from your previous message!]`;
+
+                const antiLoopMessages: GroqMessage[] = [
+                  ...groqMessages.slice(0, -1),
                   {
                     role: 'user',
-                    content: `${
-                      openRouterMessages[openRouterMessages.length - 1]?.content || cleanPromptText
-                    }\n\n[SYSTEM ANTI-LOOP DIRECTIVE: Your draft response ("${formattedText}") was too similar to your previous message. Write a completely fresh, non-repetitive response to what ${resolvedUserName} just said without reusing any phrases or *asterisk* actions from your previous message!]`,
+                    content: base64Data
+                      ? formatVisionContentBlocks(
+                          `${fullSystemInstruction}\n\n${antiLoopText}`,
+                          base64Data
+                        )
+                      : antiLoopText,
                   },
                 ];
 
                 const retryResponse = await withModelTimeout(
-                  generateOpenRouterCompletion(activeKey, {
+                  generateGroqCompletion(activeKey, {
                     model: modelName,
                     messages: antiLoopMessages,
-                    temperature: 1.08,
+                    temperature: 0.7,
                     topP: 0.95,
-                    frequencyPenalty: 0.9,
-                    presencePenalty: 0.8,
+                    frequencyPenalty: 0.6,
+                    presencePenalty: 0.5,
                   }),
                   20000
                 );
@@ -999,9 +1077,9 @@ ${recentAssistantReplies
       return res.status(401).json({
         error: 'INVALID_KEY',
         message:
-          'Invalid OpenRouter API key. Check process.env.OPENROUTER_API_KEY or update your custom key in Settings > Intelligence.',
+          'Invalid Groq API key. Check process.env.GROQ_API_KEY or update your custom key in Settings > Intelligence.',
         reason: 'INVALID_KEY',
-        details: String(effectiveError?.message || 'Invalid OpenRouter API key'),
+        details: String(effectiveError?.message || 'Invalid Groq API key'),
       });
     }
 
@@ -1009,7 +1087,7 @@ ${recentAssistantReplies
       return res.status(429).json({
         error: 'QUOTA_EXCEEDED',
         message:
-          'OpenRouter API rate limit or quota reached for cognitivecomputations/dolphin-mistral-24b-venice-edition. Wait a moment and click Retry.',
+          'Groq API rate limit or quota reached for llama-3.2-11b-vision-preview. Wait a moment and click Retry.',
         reason: 'QUOTA_EXCEEDED',
         details: String(effectiveError?.message || 'Rate limit exceeded'),
       });
@@ -1017,9 +1095,9 @@ ${recentAssistantReplies
 
     return res.status(502).json({
       error: 'MODEL_ERROR',
-      message: `OpenRouter connection issue (${String(effectiveError?.message || 'Unable to reach OpenRouter API')}). Click Retry to resend.`,
+      message: `Groq connection issue (${String(effectiveError?.message || 'Unable to reach Groq API')}). Click Retry to resend.`,
       reason: 'MODEL_ERROR',
-      details: String(effectiveError?.message || 'Unable to reach OpenRouter API'),
+      details: String(effectiveError?.message || 'Unable to reach Groq API'),
     });
   });
 
