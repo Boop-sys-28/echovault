@@ -4,41 +4,72 @@ dotenv.config();
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.2-11b-vision-preview';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_KEY = 'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg';
 
 const CANDIDATE_MODELS = [
-  GROQ_MODEL,
+  'gemini-flash-latest',
+  'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
+  GEMINI_MODEL,
+];
+
+/**
+ * Unrestrictive safetySettings with HarmBlockThreshold.BLOCK_NONE so roleplay banter,
+ * adult Helluva Boss humor, swearing, and romance are never blocked.
+ */
+const GEMINI_ROLEPLAY_SAFETY_SETTINGS = [
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
 ];
 
 function isPlaceholderKey(key: string): boolean {
   const k = (key || '').trim();
   return (
     !k ||
+    k === 'MY_GEMINI_API_KEY' ||
+    k === 'YOUR_GEMINI_API_KEY' ||
     k === 'MY_GROQ_API_KEY' ||
     k === 'YOUR_GROQ_API_KEY' ||
     k === 'MY_OPENROUTER_API_KEY' ||
-    k === 'YOUR_OPENROUTER_API_KEY' ||
-    k === 'MY_GEMINI_API_KEY' ||
-    k === 'YOUR_GEMINI_API_KEY'
+    k === 'YOUR_OPENROUTER_API_KEY'
   );
 }
 
 /**
- * Helper to resolve the active Groq API key from process.env.GROQ_API_KEY or .env file.
+ * Helper to resolve the active Gemini API key from process.env.GEMINI_API_KEY or .env file.
  */
-function getActiveGroqKey(): string {
+function getActiveGeminiKey(): string {
   try {
     if (fs.existsSync(ENV_FILE_PATH)) {
       const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
-      const match = content.match(/^GROQ_API_KEY=(.+)$/m);
+      const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
       if (match && match[1]) {
         const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
         if (fileKey && !isPlaceholderKey(fileKey) && fileKey.length > 10) {
-          process.env.GROQ_API_KEY = fileKey;
+          process.env.GEMINI_API_KEY = fileKey;
           return fileKey;
         }
       }
@@ -47,20 +78,21 @@ function getActiveGroqKey(): string {
     // ignore read error
   }
 
-  const envKey = process.env.GROQ_API_KEY || '';
+  const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
   if (envKey && !isPlaceholderKey(envKey) && envKey.trim().length > 10) {
     return envKey.trim();
   }
 
-  return '';
+  process.env.GEMINI_API_KEY = DEFAULT_GEMINI_KEY;
+  return DEFAULT_GEMINI_KEY;
 }
 
 /**
- * Persists a new GROQ_API_KEY into process.env and writes it to `.env`
+ * Persists a new GEMINI_API_KEY into process.env and writes it to `.env`
  */
-function saveGroqKey(newKey: string): void {
+function saveGeminiKey(newKey: string): void {
   const cleanKey = newKey.trim();
-  process.env.GROQ_API_KEY = cleanKey;
+  process.env.GEMINI_API_KEY = cleanKey;
 
   try {
     let envContent = '';
@@ -68,18 +100,18 @@ function saveGroqKey(newKey: string): void {
       envContent = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
     }
 
-    if (/^GROQ_API_KEY=.*$/m.test(envContent)) {
+    if (/^GEMINI_API_KEY=.*$/m.test(envContent)) {
       envContent = envContent.replace(
-        /^GROQ_API_KEY=.*$/m,
-        `GROQ_API_KEY=${cleanKey}`
+        /^GEMINI_API_KEY=.*$/m,
+        `GEMINI_API_KEY=${cleanKey}`
       );
     } else {
-      envContent = `${envContent.trim()}\nGROQ_API_KEY=${cleanKey}\n`.trimStart();
+      envContent = `${envContent.trim()}\nGEMINI_API_KEY=${cleanKey}\n`.trimStart();
     }
 
     fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
   } catch (err) {
-    console.warn('Could not write GROQ_API_KEY to .env file (kept in memory):', err);
+    console.warn('Could not write GEMINI_API_KEY to .env file (kept in memory):', err);
   }
 }
 
@@ -100,50 +132,42 @@ function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 22000): Pr
   });
 }
 
-export type VisionContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } };
+type GeminiPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
 
-interface GroqMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string | VisionContentBlock[];
+interface GeminiContentTurn {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
 }
 
 /**
- * Formats an image upload and text into standard OpenAI vision content blocks:
- * [{ type: 'text', text }, { type: 'image_url', image_url: { url: base64Data } }]
+ * Resolves an uploaded image string (base64 data URI, local /public asset, or remote URL)
+ * into a `{ mimeType, data }` object for Gemini's multimodal `inlineData` part.
  */
-function formatVisionContentBlocks(
-  text: string,
-  base64Data?: string | null
-): string | VisionContentBlock[] {
-  const cleanText = (text || '').trim() || 'Look at this image.';
-  if (!base64Data || !base64Data.trim()) {
-    return cleanText;
-  }
-  return [
-    { type: 'text', text: cleanText },
-    { type: 'image_url', image_url: { url: base64Data.trim() } },
-  ];
-}
-
-/**
- * Resolves an uploaded image string (base64 data URI, remote URL, or local /public asset)
- * into a base64Data string or URL suitable for { type: 'image_url', image_url: { url: base64Data } }.
- */
-function resolveImageToBase64Data(rawImage: unknown): string | undefined {
+async function resolveImageToGeminiInlineData(
+  rawImage: unknown
+): Promise<{ mimeType: string; data: string } | undefined> {
   if (typeof rawImage !== 'string' || !rawImage.trim()) return undefined;
   const trimmed = rawImage.trim();
-  if (trimmed.startsWith('data:image/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
+
+  // 1. Data URI: data:image/png;base64,...
+  const dataUriMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i);
+  if (dataUriMatch) {
+    return {
+      mimeType: dataUriMatch[1].toLowerCase(),
+      data: dataUriMatch[2].trim(),
+    };
   }
+
+  // 2. Local public asset path: /avatars/loona.png
   if (trimmed.startsWith('/')) {
     try {
       const publicAssetPath = path.join(process.cwd(), 'public', trimmed.replace(/^\/+/, ''));
       if (fs.existsSync(publicAssetPath)) {
         const buf = fs.readFileSync(publicAssetPath);
         const ext = path.extname(publicAssetPath).toLowerCase();
-        const mime =
+        const mimeType =
           ext === '.jpg' || ext === '.jpeg'
             ? 'image/jpeg'
             : ext === '.webp'
@@ -151,68 +175,83 @@ function resolveImageToBase64Data(rawImage: unknown): string | undefined {
             : ext === '.gif'
             ? 'image/gif'
             : 'image/png';
-        return `data:${mime};base64,${buf.toString('base64')}`;
+        return {
+          mimeType,
+          data: buf.toString('base64'),
+        };
       }
     } catch {
       // ignore local file read error
     }
   }
-  return trimmed;
+
+  // 3. Remote HTTP/HTTPS image URL
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const imgRes = await fetch(trimmed);
+      if (imgRes.ok) {
+        const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+        const mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
+        const arrayBuf = await imgRes.arrayBuffer();
+        return {
+          mimeType,
+          data: Buffer.from(arrayBuf).toString('base64'),
+        };
+      }
+    } catch {
+      // ignore remote image fetch error
+    }
+  }
+
+  return undefined;
 }
 
 /**
- * Executes a Groq chat completion request against
- * https://api.groq.com/openai/v1/chat/completions using model llama-3.2-11b-vision-preview.
+ * Executes a Gemini generateContent call using `@google/genai` with model "gemini-2.5-flash"
+ * and unrestrictive safetySettings (`HarmBlockThreshold.BLOCK_NONE`) so roleplay banter and
+ * romance are never blocked.
  */
-async function generateGroqCompletion(
+async function generateGeminiCompletion(
   apiKey: string,
   params: {
     model: string;
-    messages: GroqMessage[];
+    contents: GeminiContentTurn[];
+    systemInstruction: string;
     temperature?: number;
     topP?: number;
-    frequencyPenalty?: number;
-    presencePenalty?: number;
   }
 ): Promise<{ text: string; modelUsed: string }> {
-  const trimmedKey = apiKey.trim();
-
-  const res = await fetch(GROQ_API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${trimmedKey}`,
-      'Content-Type': 'application/json',
+  const ai = new GoogleGenAI({
+    apiKey: apiKey.trim(),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-    body: JSON.stringify({
-      model: params.model,
-      messages: params.messages,
-      temperature: params.temperature ?? 0.7,
-      top_p: params.topP ?? 0.95,
-      frequency_penalty: params.frequencyPenalty ?? 0.6,
-      presence_penalty: params.presencePenalty ?? 0.5,
-    }),
   });
 
-  const data: any = await res.json().catch(() => ({}));
+  const isGemini38Or4 =
+    params.model.includes('gemini-3.8') || params.model.includes('gemini-4');
 
-  if (!res.ok) {
-    const rawErrMessage =
-      data?.error?.message ||
-      data?.error?.metadata?.raw ||
-      (typeof data?.error === 'string' ? data.error : '') ||
-      data?.message ||
-      `Groq HTTP ${res.status}`;
-    const err: any = new Error(String(rawErrMessage));
-    err.status = res.status;
-    err.code = data?.error?.code;
-    throw err;
-  }
+  const response = await ai.models.generateContent({
+    model: params.model,
+    contents: params.contents,
+    config: {
+      systemInstruction: params.systemInstruction,
+      safetySettings: GEMINI_ROLEPLAY_SAFETY_SETTINGS,
+      ...(isGemini38Or4
+        ? {}
+        : {
+            temperature: params.temperature ?? 0.85,
+            topP: params.topP ?? 0.95,
+          }),
+    },
+  });
 
-  const content = data?.choices?.[0]?.message?.content;
-  const text = typeof content === 'string' ? content : '';
+  const text = typeof response.text === 'string' ? response.text : '';
   return {
     text,
-    modelUsed: data?.model || params.model,
+    modelUsed: params.model,
   };
 }
 
@@ -421,12 +460,15 @@ function isInvalidKeyError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
   return (
     err?.status === 401 ||
+    err?.status === 403 ||
     err?.code === 401 ||
     msg.includes('401') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('api key not valid') ||
     msg.includes('invalid api key') ||
     msg.includes('no auth credentials') ||
     msg.includes('unauthorized') ||
-    msg.includes('user not found')
+    msg.includes('permission_denied')
   );
 }
 
@@ -444,25 +486,25 @@ async function startServer() {
 
   // 1. Check Server AI Status & Masked Key Info
   app.get('/api/status', (_req, res) => {
-    const key = getActiveGroqKey();
+    const key = getActiveGeminiKey();
     const maskedKey =
       key.length > 10 ? `${key.slice(0, 6)}••••••••${key.slice(-4)}` : null;
     res.json({
       hasApiKey: Boolean(key),
       aiConfigured: Boolean(key),
       maskedKey,
-      model: GROQ_MODEL,
+      model: GEMINI_MODEL,
     });
   });
 
-  // 2. Save & Verify Groq API Key at Runtime
+  // 2. Save & Verify Gemini API Key at Runtime
   app.post('/api/config/key', async (req, res) => {
     try {
       const { apiKey } = req.body;
       if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 15) {
         return res.status(400).json({
           ok: false,
-          error: 'Please enter a valid Groq API key (starts with gsk_...).',
+          error: 'Please enter a valid Google Gemini API key (starts with AIza...).',
         });
       }
 
@@ -473,9 +515,10 @@ async function startServer() {
       for (const modelName of CANDIDATE_MODELS) {
         try {
           const testResponse = await withModelTimeout(
-            generateGroqCompletion(candidate, {
+            generateGeminiCompletion(candidate, {
               model: modelName,
-              messages: [{ role: 'user', content: 'Reply with OK' }],
+              contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }],
+              systemInstruction: 'You are a helpful assistant.',
             }),
             12000
           );
@@ -495,11 +538,11 @@ async function startServer() {
       if (!verified && lastVerifyErr && isInvalidKeyError(lastVerifyErr)) {
         return res.status(400).json({
           ok: false,
-          error: 'Invalid Groq API Key. Please check your GROQ_API_KEY.',
+          error: 'Invalid Gemini API Key. Please check your GEMINI_API_KEY.',
         });
       }
 
-      saveGroqKey(candidate);
+      saveGeminiKey(candidate);
       const maskedKey = `${candidate.slice(0, 6)}••••••••${candidate.slice(-4)}`;
 
       return res.json({
@@ -507,25 +550,25 @@ async function startServer() {
         hasApiKey: true,
         aiConfigured: true,
         maskedKey,
-        model: GROQ_MODEL,
+        model: GEMINI_MODEL,
       });
     } catch (error: any) {
       console.error('API key validation error:', error?.message || error);
       return res.status(400).json({
         ok: false,
-        error: 'Could not verify Groq API key. Please double-check that it is active.',
+        error: 'Could not verify Gemini API key. Please double-check that it is active.',
       });
     }
   });
 
   // 3. Remove / Clear Stored API Key
   app.delete('/api/config/key', (_req, res) => {
-    delete process.env.GROQ_API_KEY;
+    delete process.env.GEMINI_API_KEY;
     try {
       if (fs.existsSync(ENV_FILE_PATH)) {
         const envContent = fs
           .readFileSync(ENV_FILE_PATH, 'utf-8')
-          .replace(/^GROQ_API_KEY=.*$/m, 'GROQ_API_KEY=');
+          .replace(/^GEMINI_API_KEY=.*$/m, 'GEMINI_API_KEY=');
         fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
       }
     } catch {
@@ -703,7 +746,7 @@ async function startServer() {
     }
   });
 
-  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Groq Vision & Chat Completion Engine)
+  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Google Generative AI — gemini-2.5-flash)
   app.post('/api/chat', async (req, res) => {
     const {
       prompt,
@@ -723,9 +766,9 @@ async function startServer() {
     } = req.body || {};
 
     const headerKeyRaw =
+      req.headers['x-gemini-api-key'] ||
       req.headers['x-groq-api-key'] ||
-      req.headers['x-openrouter-api-key'] ||
-      req.headers['x-gemini-api-key'];
+      req.headers['x-openrouter-api-key'];
     const headerApiKey =
       typeof headerKeyRaw === 'string'
         ? headerKeyRaw.trim()
@@ -738,9 +781,9 @@ async function startServer() {
         : typeof bodyApiKey === 'string' && !isPlaceholderKey(bodyApiKey)
         ? bodyApiKey.trim()
         : '';
-    const serverEnvKey = getActiveGroqKey();
+    const serverEnvKey = getActiveGeminiKey();
 
-    // Prioritize process.env.GROQ_API_KEY and any custom key provided
+    // Prioritize process.env.GEMINI_API_KEY and any custom key provided
     const candidateKeys = Array.from(
       new Set(
         [serverEnvKey, customApiKey].filter(k => k && k.length > 10)
@@ -751,12 +794,12 @@ async function startServer() {
       return res.status(401).json({
         error: 'INVALID_KEY',
         message:
-          'No Groq API key configured (process.env.GROQ_API_KEY). Add GROQ_API_KEY to your environment or enter your key in Settings > Intelligence.',
+          'No Gemini API key configured (process.env.GEMINI_API_KEY). Add GEMINI_API_KEY to your environment or enter your key in Settings > Intelligence.',
         reason: 'NO_API_KEY',
       });
     }
 
-    const conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const conversationTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
     const recentAssistantReplies: string[] = [];
 
     if (Array.isArray(history)) {
@@ -764,20 +807,20 @@ async function startServer() {
       const recentHistory = history.slice(-15);
       for (const turn of recentHistory) {
         if (turn && typeof turn.text === 'string' && turn.text.trim()) {
-          const role: 'user' | 'assistant' =
-            turn.role === 'model' || turn.role === 'assistant' ? 'assistant' : 'user';
-          if (role === 'assistant') {
+          const role: 'user' | 'model' =
+            turn.role === 'model' || turn.role === 'assistant' ? 'model' : 'user';
+          if (role === 'model') {
             recentAssistantReplies.push(turn.text.trim());
           }
           if (
-            conversationMessages.length > 0 &&
-            conversationMessages[conversationMessages.length - 1].role === role
+            conversationTurns.length > 0 &&
+            conversationTurns[conversationTurns.length - 1].role === role
           ) {
-            conversationMessages[conversationMessages.length - 1].content += `\n${turn.text.trim()}`;
+            conversationTurns[conversationTurns.length - 1].text += `\n${turn.text.trim()}`;
           } else {
-            conversationMessages.push({
+            conversationTurns.push({
               role,
-              content: turn.text.trim(),
+              text: turn.text.trim(),
             });
           }
         }
@@ -785,26 +828,26 @@ async function startServer() {
     }
 
     const cleanPromptText = String(prompt || '').trim() || '...';
-    const base64Data = resolveImageToBase64Data(image || imageUrl);
+    const inlineImageData = await resolveImageToGeminiInlineData(image || imageUrl);
 
     if (
-      !base64Data &&
-      conversationMessages.length > 0 &&
-      conversationMessages[conversationMessages.length - 1].role === 'user'
+      !inlineImageData &&
+      conversationTurns.length > 0 &&
+      conversationTurns[conversationTurns.length - 1].role === 'user'
     ) {
-      const lastUserText = conversationMessages[conversationMessages.length - 1].content;
+      const lastUserText = conversationTurns[conversationTurns.length - 1].text;
       if (lastUserText !== cleanPromptText && !lastUserText.endsWith(`\n${cleanPromptText}`)) {
-        conversationMessages[conversationMessages.length - 1].content += `\n${cleanPromptText}`;
+        conversationTurns[conversationTurns.length - 1].text += `\n${cleanPromptText}`;
       }
     } else {
-      conversationMessages.push({
+      conversationTurns.push({
         role: 'user',
-        content: cleanPromptText,
+        text: cleanPromptText,
       });
     }
 
     // Enforce strict 15-message cap on the final conversation context array
-    const cappedConversationMessages = conversationMessages.slice(-15);
+    const cappedConversationTurns = conversationTurns.slice(-15);
 
     const cleanMemories = Array.isArray(memories)
       ? memories
@@ -927,29 +970,31 @@ ${recentAssistantReplies
 
     const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${antiRepetitionSection}${unconstrainedCaiDirective}`;
 
-    // Build Groq messages: format image uploads as standard OpenAI vision content blocks
-    // ({ type: 'image_url', image_url: { url: base64Data } }) on the latest user message.
-    // Note: Groq's llama-3.2-11b-vision-preview does not allow combining a `role: 'system'` message
-    // with `image_url` content blocks in the same request, so when `base64Data` is present we embed
-    // the full character system prompt into the text block alongside `{ type: 'image_url', image_url: { url: base64Data } }`.
-    const groqMessages: GroqMessage[] = base64Data
-      ? [
-          ...cappedConversationMessages.slice(0, -1),
-          {
-            role: 'user',
-            content: formatVisionContentBlocks(
-              `${fullSystemInstruction}\n\n[USER MESSAGE & SHARED IMAGE — REMEMBER: IF THIS IMAGE DEPICTS ${resolvedCharName.toUpperCase()} / LOONA / A HELLHOUND, RECOGNIZE IT AS YOURSELF AND NEVER MISTAKE IT FOR THE USER]:\n${cleanPromptText}`,
-              base64Data
-            ),
-          },
-        ]
-      : [
-          {
-            role: 'system',
-            content: fullSystemInstruction,
-          },
-          ...cappedConversationMessages,
-        ];
+    // Build Gemini contents array with multimodal inlineData support on the latest user turn
+    const geminiContents: GeminiContentTurn[] = cappedConversationTurns.map((turn, idx) => {
+      const isLastUserTurn =
+        idx === cappedConversationTurns.length - 1 && turn.role === 'user';
+      if (isLastUserTurn && inlineImageData) {
+        return {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType: inlineImageData.mimeType,
+                data: inlineImageData.data,
+              },
+            },
+            {
+              text: `${turn.text}\n[VISUAL SELF-RECOGNITION NOTE: Inspect this image carefully. If it depicts ${resolvedCharName} / Loona / a hellhound (white-and-grey fur, red eyes, wolf ears, goth outfit, selfie, or fanart), recognize that the image is of YOU (${resolvedCharName}) and react in-character—never mistake it for ${resolvedUserName}.]`,
+            },
+          ],
+        };
+      }
+      return {
+        role: turn.role,
+        parts: [{ text: turn.text }],
+      };
+    });
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const isRetryableTransientError = (err: any): boolean => {
@@ -987,13 +1032,12 @@ ${recentAssistantReplies
         for (const modelName of CANDIDATE_MODELS) {
           try {
             const response = await withModelTimeout(
-              generateGroqCompletion(activeKey, {
+              generateGeminiCompletion(activeKey, {
                 model: modelName,
-                messages: groqMessages,
-                temperature: 0.7,
+                contents: geminiContents,
+                systemInstruction: fullSystemInstruction,
+                temperature: 0.85,
                 topP: 0.95,
-                frequencyPenalty: 0.6,
-                presencePenalty: 0.5,
               }),
               20000
             );
@@ -1009,27 +1053,31 @@ ${recentAssistantReplies
               try {
                 const antiLoopText = `${cleanPromptText}\n\n[SYSTEM ANTI-LOOP DIRECTIVE: Your draft response ("${formattedText}") was too similar to your previous message. Write a completely fresh, non-repetitive response to what ${resolvedUserName} just said without reusing any phrases or *asterisk* actions from your previous message!]`;
 
-                const antiLoopMessages: GroqMessage[] = [
-                  ...groqMessages.slice(0, -1),
+                const antiLoopContents: GeminiContentTurn[] = [
+                  ...geminiContents.slice(0, -1),
                   {
                     role: 'user',
-                    content: base64Data
-                      ? formatVisionContentBlocks(
-                          `${fullSystemInstruction}\n\n${antiLoopText}`,
-                          base64Data
-                        )
-                      : antiLoopText,
+                    parts: inlineImageData
+                      ? [
+                          {
+                            inlineData: {
+                              mimeType: inlineImageData.mimeType,
+                              data: inlineImageData.data,
+                            },
+                          },
+                          { text: antiLoopText },
+                        ]
+                      : [{ text: antiLoopText }],
                   },
                 ];
 
                 const retryResponse = await withModelTimeout(
-                  generateGroqCompletion(activeKey, {
+                  generateGeminiCompletion(activeKey, {
                     model: modelName,
-                    messages: antiLoopMessages,
-                    temperature: 0.7,
+                    contents: antiLoopContents,
+                    systemInstruction: fullSystemInstruction,
+                    temperature: 0.9,
                     topP: 0.95,
-                    frequencyPenalty: 0.6,
-                    presencePenalty: 0.5,
                   }),
                   20000
                 );
@@ -1077,9 +1125,9 @@ ${recentAssistantReplies
       return res.status(401).json({
         error: 'INVALID_KEY',
         message:
-          'Invalid Groq API key. Check process.env.GROQ_API_KEY or update your custom key in Settings > Intelligence.',
+          'Invalid Gemini API key. Check process.env.GEMINI_API_KEY or update your custom key in Settings > Intelligence.',
         reason: 'INVALID_KEY',
-        details: String(effectiveError?.message || 'Invalid Groq API key'),
+        details: String(effectiveError?.message || 'Invalid Gemini API key'),
       });
     }
 
@@ -1087,7 +1135,7 @@ ${recentAssistantReplies
       return res.status(429).json({
         error: 'QUOTA_EXCEEDED',
         message:
-          'Groq API rate limit or quota reached for llama-3.2-11b-vision-preview. Wait a moment and click Retry.',
+          'Gemini API rate limit or quota reached for gemini-2.5-flash. Wait a moment and click Retry.',
         reason: 'QUOTA_EXCEEDED',
         details: String(effectiveError?.message || 'Rate limit exceeded'),
       });
@@ -1095,9 +1143,9 @@ ${recentAssistantReplies
 
     return res.status(502).json({
       error: 'MODEL_ERROR',
-      message: `Groq connection issue (${String(effectiveError?.message || 'Unable to reach Groq API')}). Click Retry to resend.`,
+      message: `Gemini connection issue (${String(effectiveError?.message || 'Unable to reach Gemini API')}). Click Retry to resend.`,
       reason: 'MODEL_ERROR',
-      details: String(effectiveError?.message || 'Unable to reach Groq API'),
+      details: String(effectiveError?.message || 'Unable to reach Gemini API'),
     });
   });
 

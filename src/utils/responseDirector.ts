@@ -440,43 +440,97 @@ export function processArchitectCommand(
   };
 }
 
-export const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-export const GROQ_MODEL = 'llama-3.2-11b-vision-preview';
+export const GEMINI_MODEL = 'gemini-2.5-flash';
 
-// Backwards-compatible aliases
-export const OPENROUTER_API_URL = GROQ_API_URL;
-export const OPENROUTER_MODEL = GROQ_MODEL;
-export const OPENROUTER_REFERER = 'https://echovault-or9c.onrender.com';
-export const OPENROUTER_TITLE = 'EchoVault';
+export const GEMINI_ROLEPLAY_SAFETY_SETTINGS = [
+  {
+    category: 'HARM_CATEGORY_HARASSMENT',
+    threshold: 'BLOCK_NONE',
+  },
+  {
+    category: 'HARM_CATEGORY_HATE_SPEECH',
+    threshold: 'BLOCK_NONE',
+  },
+  {
+    category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    threshold: 'BLOCK_NONE',
+  },
+  {
+    category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+    threshold: 'BLOCK_NONE',
+  },
+  {
+    category: 'HARM_CATEGORY_CIVIC_INTEGRITY',
+    threshold: 'BLOCK_NONE',
+  },
+] as const;
+
 export const DEFAULT_FREQUENCY_PENALTY = 0.6;
 export const DEFAULT_PRESENCE_PENALTY = 0.5;
 export const MAX_CHAT_HISTORY_MESSAGES = 15;
+
+export interface GeminiInlineDataPart {
+  inlineData: {
+    mimeType: string;
+    data: string;
+  };
+}
+
+export interface GeminiTextPart {
+  text: string;
+}
+
+export type GeminiContentPart = GeminiTextPart | GeminiInlineDataPart;
 
 export type VisionContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
 
 export interface OpenRouterChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'model';
   content: string | VisionContentBlock[];
 }
 
 /**
- * Formats a user message with an optional base64 or URL image into standard
- * OpenAI / Groq vision content blocks:
- * [{ type: 'text', text }, { type: 'image_url', image_url: { url: base64Data } }]
+ * Extracts raw base64 data and MIME type from a data URI or base64 string for
+ * Gemini multimodal inlineData parts.
  */
-export function formatVisionContentBlocks(
+export function parseBase64ImageForGemini(
+  imageInput?: string | null
+): { mimeType: string; data: string } | null {
+  if (!imageInput || !imageInput.trim()) return null;
+  const trimmed = imageInput.trim();
+  const dataUriMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/i);
+  if (dataUriMatch) {
+    return {
+      mimeType: dataUriMatch[1].toLowerCase(),
+      data: dataUriMatch[2].trim(),
+    };
+  }
+  return null;
+}
+
+/**
+ * Formats a user message and optional base64 image into Gemini multimodal parts
+ * ([{ inlineData: { mimeType, data } }, { text }]).
+ */
+export function formatGeminiMultimodalParts(
   text: string,
   base64Data?: string
-): string | VisionContentBlock[] {
+): GeminiContentPart[] {
   const cleanText = (text || '').trim() || 'Look at this image.';
-  if (!base64Data || !base64Data.trim()) {
-    return cleanText;
+  const parsedImage = parseBase64ImageForGemini(base64Data);
+  if (!parsedImage) {
+    return [{ text: cleanText }];
   }
   return [
-    { type: 'text', text: cleanText },
-    { type: 'image_url', image_url: { url: base64Data.trim() } },
+    {
+      inlineData: {
+        mimeType: parsedImage.mimeType,
+        data: parsedImage.data,
+      },
+    },
+    { text: cleanText },
   ];
 }
 
@@ -657,101 +711,80 @@ export function deduplicateConsecutiveBubbles(
 }
 
 /**
- * Executes a Groq OpenAI-compatible chat/vision completion request using
- * https://api.groq.com/openai/v1/chat/completions and model
- * llama-3.2-11b-vision-preview.
+ * Executes a Gemini chat/multimodal completion request via the server-side
+ * `/api/chat` proxy using model "gemini-2.5-flash" and safetySettings BLOCK_NONE.
  */
-export async function requestGroqCompletion(params: {
-  apiKey: string;
+export async function requestGeminiCompletion(params: {
+  apiKey?: string;
   systemInstruction: string;
   messages: OpenRouterChatMessage[];
   imageBase64?: string;
   temperature?: number;
   topP?: number;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
   model?: string;
 }): Promise<{ text: string; modelUsed: string }> {
-  const activeModel = params.model || GROQ_MODEL;
-  const recentContextMessages = [...params.messages.slice(-MAX_CHAT_HISTORY_MESSAGES)];
+  const activeModel = params.model || GEMINI_MODEL;
+  const recentContextMessages = params.messages.slice(-MAX_CHAT_HISTORY_MESSAGES);
+  const lastMsg = recentContextMessages[recentContextMessages.length - 1];
+  const promptText =
+    typeof lastMsg?.content === 'string'
+      ? lastMsg.content
+      : Array.isArray(lastMsg?.content)
+      ? lastMsg.content
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map(b => b.text)
+          .join('\n')
+      : '';
 
-  if (params.imageBase64 && recentContextMessages.length > 0) {
-    const lastIdx = recentContextMessages.length - 1;
-    const lastMsg = recentContextMessages[lastIdx];
-    const lastText =
-      typeof lastMsg.content === 'string'
-        ? lastMsg.content
-        : lastMsg.content
+  const history = recentContextMessages.slice(0, -1).map(m => ({
+    role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+    text:
+      typeof m.content === 'string'
+        ? m.content
+        : m.content
             .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
             .map(b => b.text)
-            .join('\n');
-    recentContextMessages[lastIdx] = {
-      role: 'user',
-      content: formatVisionContentBlocks(lastText, params.imageBase64),
-    };
+            .join('\n'),
+  }));
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (params.apiKey && params.apiKey.trim()) {
+    headers['x-gemini-api-key'] = params.apiKey.trim();
   }
 
-  const hasVisionBlock = recentContextMessages.some(m => Array.isArray(m.content));
-
-  const fullMessages: OpenRouterChatMessage[] = hasVisionBlock
-    ? recentContextMessages.map((m, idx) => {
-        if (idx === recentContextMessages.length - 1 && Array.isArray(m.content) && params.systemInstruction) {
-          return {
-            role: 'user',
-            content: m.content.map(block =>
-              block.type === 'text'
-                ? {
-                    type: 'text' as const,
-                    text: `[CHARACTER SYSTEM DIRECTIVE]:\n${params.systemInstruction}\n\n[USER MESSAGE & IMAGE]:\n${block.text}`,
-                  }
-                : block
-            ),
-          };
-        }
-        return m;
-      })
-    : [
-        ...(params.systemInstruction
-          ? [{ role: 'system' as const, content: params.systemInstruction }]
-          : []),
-        ...recentContextMessages,
-      ];
-
-  const response = await fetch(GROQ_API_URL, {
+  const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${params.apiKey.trim()}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
-      model: activeModel,
-      messages: fullMessages,
-      temperature: params.temperature ?? 0.7,
-      top_p: params.topP ?? 0.95,
-      frequency_penalty: params.frequencyPenalty ?? DEFAULT_FREQUENCY_PENALTY,
-      presence_penalty: params.presencePenalty ?? DEFAULT_PRESENCE_PENALTY,
+      prompt: promptText,
+      image: params.imageBase64,
+      systemInstruction: params.systemInstruction,
+      history,
+      temporalContext: getLiveTemporalContext(),
     }),
   });
 
   const data: any = await response.json().catch(() => ({}));
   if (!response.ok) {
     const errMsg =
-      data?.error?.message ||
-      data?.error ||
       data?.message ||
-      `Groq HTTP ${response.status}`;
+      data?.error ||
+      `Gemini HTTP ${response.status}`;
     const err: any = new Error(String(errMsg));
     err.status = response.status;
     throw err;
   }
 
-  const content = data?.choices?.[0]?.message?.content;
-  const text = typeof content === 'string' ? content.trim() : '';
+  const text = typeof data?.text === 'string' ? data.text.trim() : '';
   return {
     text,
-    modelUsed: data?.model || activeModel,
+    modelUsed: data?.modelUsed || activeModel,
   };
 }
 
-export const requestOpenRouterCompletion = requestGroqCompletion;
+export const requestGroqCompletion = requestGeminiCompletion;
+export const requestOpenRouterCompletion = requestGeminiCompletion;
+
 

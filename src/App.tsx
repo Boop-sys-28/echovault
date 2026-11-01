@@ -1991,12 +1991,12 @@ export default function App() {
         if (!hasServerAi) setHasServerAi(true);
       } else {
         setIsTyping(false);
-        setApiErrorBanner(data?.message || data?.error || '⚠️ Groq API quota / connection error');
+        setApiErrorBanner(data?.message || data?.error || '⚠️ Gemini API quota / connection error');
         return;
       }
     } catch {
       setIsTyping(false);
-      setApiErrorBanner('⚠️ Groq API quota / connection error');
+      setApiErrorBanner('⚠️ Gemini API quota / connection error');
       return;
     }
 
