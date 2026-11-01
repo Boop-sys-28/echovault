@@ -107,9 +107,11 @@ interface OpenRouterMessage {
 }
 
 /**
+/**
  * Executes an OpenRouter chat completion request against
  * https://openrouter.ai/api/v1/chat/completions with required headers
- * HTTP-Referer: https://echovault-or9c.onrender.com and X-Title: EchoVault.
+ * HTTP-Referer: https://echovault-or9c.onrender.com and X-Title: EchoVault,
+ * plus frequency_penalty: 0.7 and presence_penalty: 0.6 to prevent repetition loops.
  */
 async function generateOpenRouterCompletion(
   apiKey: string,
@@ -118,6 +120,8 @@ async function generateOpenRouterCompletion(
     messages: OpenRouterMessage[];
     temperature?: number;
     topP?: number;
+    frequencyPenalty?: number;
+    presencePenalty?: number;
   }
 ): Promise<{ text: string; modelUsed: string }> {
   const trimmedKey = apiKey.trim();
@@ -135,6 +139,8 @@ async function generateOpenRouterCompletion(
       messages: params.messages,
       temperature: params.temperature ?? 0.95,
       top_p: params.topP ?? 0.95,
+      frequency_penalty: params.frequencyPenalty ?? 0.7,
+      presence_penalty: params.presencePenalty ?? 0.6,
     }),
   });
 
@@ -162,32 +168,192 @@ async function generateOpenRouterCompletion(
 }
 
 /**
- * Cleans up model output while preserving Character.AI-style asterisk roleplay (*...*),
- * raw emotional tone, and multi-bubble formatting (` || `).
+ * Normalizes a string for consecutive repetition comparison.
  */
-function formatCharacterBubbles(rawText: string): string {
+function normalizeForRepetition(text: string): string {
+  return (text || '')
+    .toLowerCase()
+    .replace(/^(?:character|assistant|ai|model|system):\s*/gi, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Computes word and bigram overlap similarity (0.0 to 1.0) between two responses.
+ */
+function computeServerResponseSimilarity(a: string, b: string): number {
+  const normA = normalizeForRepetition(a);
+  const normB = normalizeForRepetition(b);
+  if (!normA || !normB) return 0;
+  if (normA === normB) return 1;
+
+  if (normA.length >= 24 && normB.length >= 24) {
+    if (normA.includes(normB) || normB.includes(normA)) {
+      return 0.92;
+    }
+  }
+
+  const wordsA = normA.split(' ').filter(w => w.length > 2);
+  const wordsB = normB.split(' ').filter(w => w.length > 2);
+  if (wordsA.length === 0 || wordsB.length === 0) return 0;
+
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  let wordHits = 0;
+  setA.forEach(w => {
+    if (setB.has(w)) wordHits++;
+  });
+  const wordUnion = new Set([...wordsA, ...wordsB]).size;
+  const wordJaccard = wordUnion > 0 ? wordHits / wordUnion : 0;
+
+  const bigramsA = new Set<string>();
+  const bigramsB = new Set<string>();
+  for (let i = 0; i < wordsA.length - 1; i++) {
+    bigramsA.add(`${wordsA[i]} ${wordsA[i + 1]}`);
+  }
+  for (let i = 0; i < wordsB.length - 1; i++) {
+    bigramsB.add(`${wordsB[i]} ${wordsB[i + 1]}`);
+  }
+
+  if (bigramsA.size === 0 || bigramsB.size === 0) {
+    return wordJaccard;
+  }
+
+  let bigramHits = 0;
+  bigramsA.forEach(bg => {
+    if (bigramsB.has(bg)) bigramHits++;
+  });
+  const bigramUnion = new Set([...bigramsA, ...bigramsB]).size;
+  const bigramJaccard = bigramUnion > 0 ? bigramHits / bigramUnion : 0;
+
+  return Math.max(wordJaccard * 0.75 + bigramJaccard * 0.25, bigramJaccard);
+}
+
+/**
+ * Checks if a candidate reply is identical or nearly identical to recent assistant responses.
+ */
+function isServerNearDuplicateResponse(
+  candidate: string,
+  recentAssistantMessages: string[],
+  threshold: number = 0.62
+): boolean {
+  const cleanCandidate = (candidate || '').trim();
+  if (!cleanCandidate || recentAssistantMessages.length === 0) return false;
+
+  const candidateBubbles = cleanCandidate
+    .split('||')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const prev of recentAssistantMessages.slice(-4)) {
+    if (!prev || !prev.trim()) continue;
+    if (computeServerResponseSimilarity(cleanCandidate, prev) >= threshold) {
+      return true;
+    }
+
+    const prevBubbles = prev
+      .split('||')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    if (
+      candidateBubbles.length > 0 &&
+      candidateBubbles.every(cb =>
+        prevBubbles.some(pb => computeServerResponseSimilarity(cb, pb) >= threshold)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Cleans up model output while preserving Character.AI-style asterisk roleplay (*...*),
+ * raw emotional tone, and multi-bubble formatting (` || `), and strips repeated bubbles
+ * or repeated *asterisk* descriptions that match recent assistant messages.
+ */
+function formatCharacterBubbles(
+  rawText: string,
+  recentAssistantMessages: string[] = []
+): string {
   const cleaned = rawText
     .replace(/^(?:Character|Assistant|AI|Model|System):\s*/gim, '')
     .trim();
 
   if (!cleaned) return '';
 
-  let bubbles: string[];
+  let rawBubbles: string[];
   if (cleaned.includes('||')) {
-    bubbles = cleaned
+    rawBubbles = cleaned
       .split('||')
       .map(s => s.trim())
       .filter(Boolean);
   } else if (cleaned.includes('\n\n')) {
-    bubbles = cleaned
+    rawBubbles = cleaned
       .split(/\n{2,}/)
       .map(s => s.trim())
       .filter(Boolean);
   } else {
-    bubbles = [cleaned];
+    rawBubbles = [cleaned];
   }
 
-  return bubbles.slice(0, 3).join(' || ');
+  const recentBubbles = recentAssistantMessages
+    .slice(-3)
+    .flatMap(m => (m || '').split('||').map(s => s.trim()).filter(Boolean));
+
+  const recentActions = recentAssistantMessages
+    .slice(-3)
+    .flatMap(m => {
+      const matches = (m || '').match(/\*[^*]{10,}\*/g);
+      return matches ? matches.map(a => a.trim()) : [];
+    });
+
+  const uniqueBubbles: string[] = [];
+
+  for (const bubble of rawBubbles) {
+    let cleanedBubble = bubble;
+
+    // Strip repeated *asterisk* descriptions if they already appeared in recent assistant replies
+    const actionMatches = cleanedBubble.match(/\*[^*]{10,}\*/g);
+    if (actionMatches && recentActions.length > 0) {
+      for (const act of actionMatches) {
+        const isRepeatedAction = recentActions.some(
+          ra => computeServerResponseSimilarity(act, ra) >= 0.65
+        );
+        if (isRepeatedAction) {
+          cleanedBubble = cleanedBubble.replace(act, '').replace(/\s{2,}/g, ' ').trim();
+        }
+      }
+    }
+
+    if (!cleanedBubble) continue;
+
+    // Prevent identical or near-identical bubbles within the same turn
+    if (
+      uniqueBubbles.some(ub => computeServerResponseSimilarity(cleanedBubble, ub) >= 0.65)
+    ) {
+      continue;
+    }
+
+    // Prevent repeating a bubble from the previous assistant turns when multiple bubbles exist
+    if (
+      rawBubbles.length > 1 &&
+      recentBubbles.some(rb => computeServerResponseSimilarity(cleanedBubble, rb) >= 0.65)
+    ) {
+      continue;
+    }
+
+    uniqueBubbles.push(cleanedBubble);
+  }
+
+  if (uniqueBubbles.length === 0) {
+    return rawBubbles[0] || '';
+  }
+
+  return uniqueBubbles.slice(0, 3).join(' || ');
 }
 
 function isQuotaError(err: any): boolean {
@@ -538,13 +704,18 @@ async function startServer() {
     }
 
     const conversationMessages: OpenRouterMessage[] = [];
+    const recentAssistantReplies: string[] = [];
 
     if (Array.isArray(history)) {
-      const recentHistory = history.slice(-50);
+      // Only send the last 15 messages from chat history in the context payload
+      const recentHistory = history.slice(-15);
       for (const turn of recentHistory) {
         if (turn && typeof turn.text === 'string' && turn.text.trim()) {
           const role: 'user' | 'assistant' =
             turn.role === 'model' || turn.role === 'assistant' ? 'assistant' : 'user';
+          if (role === 'assistant') {
+            recentAssistantReplies.push(turn.text.trim());
+          }
           if (
             conversationMessages.length > 0 &&
             conversationMessages[conversationMessages.length - 1].role === role
@@ -575,6 +746,9 @@ async function startServer() {
         content: cleanPromptText,
       });
     }
+
+    // Enforce strict 15-message cap on the final conversation context array
+    const cappedConversationMessages = conversationMessages.slice(-15);
 
     const cleanMemories = Array.isArray(memories)
       ? memories
@@ -642,6 +816,18 @@ async function startServer() {
         }`
       : '';
 
+    const antiRepetitionSection =
+      recentAssistantReplies.length > 0
+        ? `\n\n[ANTI-REPETITION & CONSECUTIVE LOOP GUARD — STRICTLY ENFORCED]:
+- NEVER repeat, echo, or paraphrase your own previous messages, opening hooks, or *asterisk* physical descriptions consecutively.
+- Move the conversation forward with new words, fresh reactions, and different body language on every single turn.
+- Your most recent replies in this chat were:
+${recentAssistantReplies
+  .slice(-3)
+  .map((r, i) => `  [Recent Reply ${i + 1} - DO NOT REPEAT]: "${r}"`)
+  .join('\n')}`
+        : '';
+
     const nowFallback = new Date();
     const fallbackHour = nowFallback.getHours();
     const fallbackPhase =
@@ -682,14 +868,14 @@ async function startServer() {
 - DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages, matching your Character.ai dialogue examples (mesExamples).
 - MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
 
-    const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${unconstrainedCaiDirective}`;
+    const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${antiRepetitionSection}${unconstrainedCaiDirective}`;
 
     const openRouterMessages: OpenRouterMessage[] = [
       {
         role: 'system',
         content: fullSystemInstruction,
       },
-      ...conversationMessages,
+      ...cappedConversationMessages,
     ];
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -714,6 +900,7 @@ async function startServer() {
     let lastError: any = null;
     let nonAuthError: any = null;
     const MAX_BACKOFF_PASSES = 2;
+    const allComparisonReplies = [...recentAssistantReplies, ...prevVariantsList];
 
     for (const activeKey of candidateKeys) {
       let keyInvalid = false;
@@ -732,12 +919,54 @@ async function startServer() {
                 messages: openRouterMessages,
                 temperature: isRegenerate ? 1.05 : 0.95,
                 topP: 0.95,
+                frequencyPenalty: 0.7,
+                presencePenalty: 0.6,
               }),
               20000
             );
 
-            const rawText = response.text || '';
-            const formattedText = formatCharacterBubbles(rawText);
+            let rawText = response.text || '';
+            let formattedText = formatCharacterBubbles(rawText, allComparisonReplies);
+
+            // Check to prevent the bot from generating identical or nearly identical responses consecutively
+            if (
+              formattedText &&
+              isServerNearDuplicateResponse(formattedText, allComparisonReplies, 0.62)
+            ) {
+              try {
+                const antiLoopMessages: OpenRouterMessage[] = [
+                  ...openRouterMessages.slice(0, -1),
+                  {
+                    role: 'user',
+                    content: `${
+                      openRouterMessages[openRouterMessages.length - 1]?.content || cleanPromptText
+                    }\n\n[SYSTEM ANTI-LOOP DIRECTIVE: Your draft response ("${formattedText}") was too similar to your previous message. Write a completely fresh, non-repetitive response to what ${resolvedUserName} just said without reusing any phrases or *asterisk* actions from your previous message!]`,
+                  },
+                ];
+
+                const retryResponse = await withModelTimeout(
+                  generateOpenRouterCompletion(activeKey, {
+                    model: modelName,
+                    messages: antiLoopMessages,
+                    temperature: 1.08,
+                    topP: 0.95,
+                    frequencyPenalty: 0.9,
+                    presencePenalty: 0.8,
+                  }),
+                  20000
+                );
+
+                const retryFormatted = formatCharacterBubbles(
+                  retryResponse.text || '',
+                  [...allComparisonReplies, formattedText]
+                );
+                if (retryFormatted) {
+                  formattedText = retryFormatted;
+                }
+              } catch {
+                // Keep deduplicated formattedText if retry fails
+              }
+            }
 
             if (formattedText) {
               return res.json({

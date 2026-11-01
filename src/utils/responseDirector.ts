@@ -440,6 +440,9 @@ export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions
 export const OPENROUTER_MODEL = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
 export const OPENROUTER_REFERER = 'https://echovault-or9c.onrender.com';
 export const OPENROUTER_TITLE = 'EchoVault';
+export const DEFAULT_FREQUENCY_PENALTY = 0.7;
+export const DEFAULT_PRESENCE_PENALTY = 0.6;
+export const MAX_CHAT_HISTORY_MESSAGES = 15;
 
 export interface OpenRouterChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -447,9 +450,186 @@ export interface OpenRouterChatMessage {
 }
 
 /**
+ * Normalizes a message string for similarity and repetition comparison.
+ */
+export function normalizeTextForRepetitionCheck(text: string): string {
+  return (text || '')
+    .toLowerCase()
+    .replace(/^(?:character|assistant|ai|model|system):\s*/gi, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Computes a similarity score (0.0 to 1.0) between two response strings using
+ * normalized word-level and bigram Jaccard overlap plus substring containment.
+ */
+export function computeResponseSimilarity(a: string, b: string): number {
+  const normA = normalizeTextForRepetitionCheck(a);
+  const normB = normalizeTextForRepetitionCheck(b);
+  if (!normA || !normB) return 0;
+  if (normA === normB) return 1;
+
+  if (normA.length >= 24 && normB.length >= 24) {
+    if (normA.includes(normB) || normB.includes(normA)) {
+      return 0.92;
+    }
+  }
+
+  const wordsA = normA.split(' ').filter(w => w.length > 2);
+  const wordsB = normB.split(' ').filter(w => w.length > 2);
+  if (wordsA.length === 0 || wordsB.length === 0) return 0;
+
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  let wordIntersection = 0;
+  setA.forEach(w => {
+    if (setB.has(w)) wordIntersection++;
+  });
+  const wordUnion = new Set([...wordsA, ...wordsB]).size;
+  const wordJaccard = wordUnion > 0 ? wordIntersection / wordUnion : 0;
+
+  const bigramsA = new Set<string>();
+  const bigramsB = new Set<string>();
+  for (let i = 0; i < wordsA.length - 1; i++) {
+    bigramsA.add(`${wordsA[i]} ${wordsA[i + 1]}`);
+  }
+  for (let i = 0; i < wordsB.length - 1; i++) {
+    bigramsB.add(`${wordsB[i]} ${wordsB[i + 1]}`);
+  }
+
+  if (bigramsA.size === 0 || bigramsB.size === 0) {
+    return wordJaccard;
+  }
+
+  let bigramIntersection = 0;
+  bigramsA.forEach(bg => {
+    if (bigramsB.has(bg)) bigramIntersection++;
+  });
+  const bigramUnion = new Set([...bigramsA, ...bigramsB]).size;
+  const bigramJaccard = bigramUnion > 0 ? bigramIntersection / bigramUnion : 0;
+
+  return Math.max(wordJaccard * 0.75 + bigramJaccard * 0.25, bigramJaccard);
+}
+
+/**
+ * Checks whether a candidate response is identical or nearly identical to any of the
+ * recent assistant/character messages.
+ */
+export function isNearDuplicateResponse(
+  candidate: string,
+  recentAssistantMessages: string[],
+  threshold: number = 0.62
+): boolean {
+  const cleanCandidate = (candidate || '').trim();
+  if (!cleanCandidate || !Array.isArray(recentAssistantMessages) || recentAssistantMessages.length === 0) {
+    return false;
+  }
+
+  const candidateBubbles = cleanCandidate
+    .split('||')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const prev of recentAssistantMessages.slice(-4)) {
+    if (!prev || !prev.trim()) continue;
+    if (computeResponseSimilarity(cleanCandidate, prev) >= threshold) {
+      return true;
+    }
+
+    const prevBubbles = prev
+      .split('||')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    // If all bubbles in candidate match bubbles in a recent assistant reply, flag as duplicate
+    if (
+      candidateBubbles.length > 0 &&
+      candidateBubbles.every(cb =>
+        prevBubbles.some(pb => computeResponseSimilarity(cb, pb) >= threshold)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Removes duplicate bubbles within a response and strips individual bubbles or
+ * repeated *asterisk* descriptions that are nearly identical to recent assistant messages.
+ */
+export function deduplicateConsecutiveBubbles(
+  rawReplyText: string,
+  recentAssistantMessages: string[] = []
+): string {
+  const rawBubbles = (rawReplyText || '')
+    .split('||')
+    .map(b => b.trim())
+    .filter(Boolean);
+
+  if (rawBubbles.length === 0) return '';
+
+  const recentBubbles = recentAssistantMessages
+    .slice(-3)
+    .flatMap(m => (m || '').split('||').map(s => s.trim()).filter(Boolean));
+
+  const recentActions = recentAssistantMessages
+    .slice(-3)
+    .flatMap(m => {
+      const matches = (m || '').match(/\*[^*]{10,}\*/g);
+      return matches ? matches.map(a => a.trim()) : [];
+    });
+
+  const uniqueBubbles: string[] = [];
+
+  for (const bubble of rawBubbles) {
+    let cleanedBubble = bubble;
+
+    // Strip repeated *asterisk* descriptions if they already appeared in recent assistant messages
+    const actionMatches = cleanedBubble.match(/\*[^*]{10,}\*/g);
+    if (actionMatches && recentActions.length > 0) {
+      for (const act of actionMatches) {
+        const isRepeatedAction = recentActions.some(
+          ra => computeResponseSimilarity(act, ra) >= 0.65
+        );
+        if (isRepeatedAction) {
+          cleanedBubble = cleanedBubble.replace(act, '').replace(/\s{2,}/g, ' ').trim();
+        }
+      }
+    }
+
+    if (!cleanedBubble) continue;
+
+    const duplicatesInternal = uniqueBubbles.some(
+      ub => computeResponseSimilarity(cleanedBubble, ub) >= 0.65
+    );
+    if (duplicatesInternal) continue;
+
+    const duplicatesRecent = recentBubbles.some(
+      rb => computeResponseSimilarity(cleanedBubble, rb) >= 0.65
+    );
+    if (duplicatesRecent && rawBubbles.length > 1) {
+      continue;
+    }
+
+    uniqueBubbles.push(cleanedBubble);
+  }
+
+  if (uniqueBubbles.length === 0) {
+    return rawBubbles[0];
+  }
+
+  return uniqueBubbles.slice(0, 3).join(' || ');
+}
+
+/**
  * Executes an OpenRouter chat completion request using
  * https://openrouter.ai/api/v1/chat/completions and model
- * cognitivecomputations/dolphin-mistral-24b-venice-edition.
+ * cognitivecomputations/dolphin-mistral-24b-venice-edition
+ * with frequency_penalty: 0.7 and presence_penalty: 0.6.
  */
 export async function requestOpenRouterCompletion(params: {
   apiKey: string;
@@ -457,14 +637,17 @@ export async function requestOpenRouterCompletion(params: {
   messages: OpenRouterChatMessage[];
   temperature?: number;
   topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
   model?: string;
 }): Promise<{ text: string; modelUsed: string }> {
   const activeModel = params.model || OPENROUTER_MODEL;
+  const recentContextMessages = params.messages.slice(-MAX_CHAT_HISTORY_MESSAGES);
   const fullMessages: OpenRouterChatMessage[] = [
     ...(params.systemInstruction
       ? [{ role: 'system' as const, content: params.systemInstruction }]
       : []),
-    ...params.messages,
+    ...recentContextMessages,
   ];
 
   const response = await fetch(OPENROUTER_API_URL, {
@@ -480,6 +663,8 @@ export async function requestOpenRouterCompletion(params: {
       messages: fullMessages,
       temperature: params.temperature ?? 0.95,
       top_p: params.topP ?? 0.95,
+      frequency_penalty: params.frequencyPenalty ?? DEFAULT_FREQUENCY_PENALTY,
+      presence_penalty: params.presencePenalty ?? DEFAULT_PRESENCE_PENALTY,
     }),
   });
 
@@ -502,4 +687,3 @@ export async function requestOpenRouterCompletion(params: {
     modelUsed: data?.model || activeModel,
   };
 }
-

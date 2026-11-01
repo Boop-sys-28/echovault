@@ -65,6 +65,10 @@ import {
   buildCharacterCaiDefinitionBlock,
   getLiveTemporalContext,
   buildLiveTemporalPromptBlock,
+  DEFAULT_FREQUENCY_PENALTY,
+  DEFAULT_PRESENCE_PENALTY,
+  MAX_CHAT_HISTORY_MESSAGES,
+  deduplicateConsecutiveBubbles,
 } from './utils/responseDirector';
 import {
   formatBubbleTimestamp,
@@ -1056,10 +1060,17 @@ export default function App() {
     }
   ) => {
     const sequenceId = ++typingSequenceCancelRef.current;
+    const currentChatHistory = (burnerMode ? burnerChats[char.id] : chats[char.id]) || [];
+    const recentCharMsgs = currentChatHistory
+      .filter(m => m.sender === 'char' && m.text)
+      .slice(-4)
+      .map(m => m.text);
+    const deduplicatedReplyText =
+      deduplicateConsecutiveBubbles(rawReplyText, recentCharMsgs) || rawReplyText;
 
     orchestrateSequentialBubbles(
       char.id,
-      rawReplyText,
+      deduplicatedReplyText,
       {
         shouldCancel: () => typingSequenceCancelRef.current !== sequenceId,
         onTypingChange: (typing) => setIsTyping(typing),
@@ -1158,8 +1169,14 @@ export default function App() {
     let lastData: any = {};
     const trimmedKey = (customKey || '').trim();
     const liveTemporalContext = getLiveTemporalContext(new Date());
+    const cappedHistory = Array.isArray(payload.history)
+      ? payload.history.slice(-MAX_CHAT_HISTORY_MESSAGES)
+      : payload.history;
     const enrichedPayload = {
       ...payload,
+      history: cappedHistory,
+      frequencyPenalty: DEFAULT_FREQUENCY_PENALTY,
+      presencePenalty: DEFAULT_PRESENCE_PENALTY,
       temporalContext: payload.temporalContext || liveTemporalContext,
     };
 
@@ -1254,7 +1271,7 @@ export default function App() {
           scenario: defFields.resolvedScenario,
           mesExamples: defFields.resolvedMesExamples,
           memories: memories.slice(0, 75),
-          history: historyContext.slice(-50).map(m => ({
+          history: historyContext.slice(-15).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
@@ -1642,7 +1659,7 @@ export default function App() {
           memories: responderMemories.slice(0, 75),
           history: currentRoomHistory
             .filter(m => !m.isSystemDivider)
-            .slice(-20)
+            .slice(-15)
             .map(m => ({
               role: m.senderId === 'user' ? 'user' : 'model',
               text: `${m.senderName}: ${m.text}`,
@@ -1822,7 +1839,7 @@ export default function App() {
           scenario: defFields.resolvedScenario,
           mesExamples: defFields.resolvedMesExamples,
           memories: activeMemories.slice(0, 75),
-          history: historyContext.slice(-50).map(m => ({
+          history: historyContext.slice(-15).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
@@ -1959,7 +1976,7 @@ export default function App() {
           scenario: defFields.resolvedScenario,
           mesExamples: defFields.resolvedMesExamples,
           memories: memories.slice(0, 75),
-          history: historyContext.slice(-50).map(m => ({
+          history: historyContext.slice(-15).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
@@ -2309,7 +2326,7 @@ export default function App() {
             scenario: defFields.resolvedScenario,
             mesExamples: defFields.resolvedMesExamples,
             memories: activeMemories.slice(0, 75),
-            history: historyBeforePivot.slice(-50).map(m => ({
+            history: historyBeforePivot.slice(-15).map(m => ({
               role: m.sender === 'user' ? 'user' : 'model',
               text: m.text,
             })),
@@ -2478,7 +2495,7 @@ export default function App() {
           isRegenerate: true,
           previousVariants: existingVariants,
           memories: memories.slice(0, 75),
-          history: historyBeforePrompt.slice(-50).map(m => ({
+          history: historyBeforePrompt.slice(-15).map(m => ({
             role: m.sender === 'user' ? 'user' : 'model',
             text: m.text,
           })),
