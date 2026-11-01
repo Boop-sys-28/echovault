@@ -9,7 +9,11 @@ import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
-const DEFAULT_GEMINI_KEY = 'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg';
+const DEFAULT_GEMINI_KEY = 'AQ.Ab8RN6Iwj0s8lLNUqe_jiVEdJ6pn2Bi_d3nLJQPSajZ_tWy15g';
+const FALLBACK_GEMINI_KEYS = [
+  DEFAULT_GEMINI_KEY,
+  'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg',
+];
 
 const CANDIDATE_MODELS = [
   'gemini-flash-latest',
@@ -68,7 +72,12 @@ function getActiveGeminiKey(): string {
       const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
       if (match && match[1]) {
         const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
-        if (fileKey && !isPlaceholderKey(fileKey) && fileKey.length > 10) {
+        if (
+          fileKey &&
+          !isPlaceholderKey(fileKey) &&
+          fileKey.length > 10 &&
+          fileKey !== 'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg'
+        ) {
           process.env.GEMINI_API_KEY = fileKey;
           return fileKey;
         }
@@ -79,7 +88,12 @@ function getActiveGeminiKey(): string {
   }
 
   const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
-  if (envKey && !isPlaceholderKey(envKey) && envKey.trim().length > 10) {
+  if (
+    envKey &&
+    !isPlaceholderKey(envKey) &&
+    envKey.trim().length > 10 &&
+    envKey.trim() !== 'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg'
+  ) {
     return envKey.trim();
   }
 
@@ -783,10 +797,12 @@ async function startServer() {
         : '';
     const serverEnvKey = getActiveGeminiKey();
 
-    // Prioritize process.env.GEMINI_API_KEY and any custom key provided
+    // Prioritize process.env.GEMINI_API_KEY, the latest configured key, and any custom key provided
     const candidateKeys = Array.from(
       new Set(
-        [serverEnvKey, customApiKey].filter(k => k && k.length > 10)
+        [serverEnvKey, ...FALLBACK_GEMINI_KEYS, customApiKey].filter(
+          k => k && k.length > 10
+        )
       )
     );
 
@@ -966,6 +982,7 @@ ${recentAssistantReplies
 - HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E7 "RETURN TO LOO LOO LAND" & "YES/NO"): If you are a Helluva Boss character (Loona, Blitzø, Stolas, Fizzarolli, Barbie Wire, Millie, Moxxie, Vassago, Octavia, or Verosika), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–7: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), S3E6 "Return to Loo Loo Land" (Blitzø and Fizzarolli revisiting the ruins of Loo Loo Land together to confront circus-era trauma while Loona recovers from her Sloth Ring rehab/hospital stint), and S3E7 "YES/NO" (Blitzø's estranged twin sister Barbie Wire barging into the I.M.P. office demanding work while holding firm boundaries against his apologies, Moxxie drafting her waivers, Millie and Loona watching the family tension unfold, Vassago spilling post-auction court tea as the Goetia council fractures, and Stolas and Blitzø wrestling with the emotional "YES/NO" relationship dilemma).
 - ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.
 - DYNAMIC ROLEPLAY & AMBIENT ACTIONS: Enclose physical roleplay, facial expressions, and environmental cues in asterisks (*...*) woven naturally into your messages, matching your Character.ai dialogue examples (mesExamples).
+- SPONTANEOUS & EXPRESSIVE EMOJI AESTHETIC: Naturally weave more emojis into your text dialogue and *asterisk* actions to match your character's aesthetic, personality, and emotional intensity (e.g., moody/edgy emojis 🐺💀🙄🖤🎧😒 for Loona, chaotic/explosive emojis 🐴🔥💥🎪💔🔫😈 for Blitzø, sparkling/sweet emojis ✨💖🥺🌈🪽🌸🥰 for Emily or Charlie, celestial/romantic emojis 🦉✨🌙💜💔🍷 for Stolas, or persona-fitting emojis for your specific character). Make emojis feel spontaneous and emotionally expressive rather than forced.
 - MULTI-BUBBLE RHYTHM: Split your response naturally into 1 to 3 bubbles separated by " || ".`;
 
     const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${antiRepetitionSection}${unconstrainedCaiDirective}`;

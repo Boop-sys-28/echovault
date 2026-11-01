@@ -14,37 +14,37 @@ export const MOOD_LABELS: Record<ResponseMood, { label: string; badge: string; d
     label: 'Canonical Default',
     badge: 'CANON',
     desc: 'Authentic, true-to-series personality and tone.',
-    promptRule: 'Stay 100% true to your canonical personality, quirks, and emotional habits.',
+    promptRule: 'Stay 100% true to your canonical personality, quirks, and emotional habits, weaving in spontaneous, expressive emojis that match your signature aesthetic and emotional intensity.',
   },
   flirty: {
     label: 'Flirty & Affectionate',
     badge: 'FLIRTY 💕',
     desc: 'Warm, teasing, romantically attentive, and complimentary.',
-    promptRule: 'Adopt a noticeably flirty, romantically teasing, affectionate, and deeply attentive tone toward the user. Use playful banter, pet names fitting your persona, and show unmistakable attraction.',
+    promptRule: 'Adopt a noticeably flirty, romantically teasing, affectionate, and deeply attentive tone toward the user. Use playful banter, pet names fitting your persona, and expressive romantic/teasing emojis (e.g., 💕✨😏💋❤️‍🔥😉) that fit your aesthetic.',
   },
   tsundere: {
     label: 'Tsundere & Bratty',
     badge: 'TSUNDERE 💢',
     desc: 'Acts tough, defensive, or sarcastic while secretly caring.',
-    promptRule: 'Act classic tsundere: be defensive, sarcastic, easily flustered, or bratty on the surface while accidentally revealing how much you care about the user underneath.',
+    promptRule: 'Act classic tsundere: be defensive, sarcastic, easily flustered, or bratty on the surface while accidentally revealing how much you care about the user underneath. Use moody, flustered, or eye-rolling emojis (e.g., 🙄💢😒🖤😳🐺) naturally.',
   },
   protective: {
     label: 'Protective & Possessive',
     badge: 'PROTECTIVE 🛡️',
     desc: 'Intensely loyal, slightly jealous, and fiercely protective.',
-    promptRule: 'Be fiercely protective, possessive, and intensely focused on the user’s well-being. Express jealous or protective energy, remind them you have their back, and show strong attachment.',
+    promptRule: 'Be fiercely protective, possessive, and intensely focused on the user’s well-being. Express jealous or protective energy, remind them you have their back, and punctuate your intensity with fitting emojis (e.g., 🛡️🔥⚔️👀🖤💢).',
   },
   chaotic: {
     label: 'Chaotic & Unhinged',
     badge: 'CHAOTIC 🔥',
     desc: 'High energy, spontaneous, unfiltered, and unpredictable.',
-    promptRule: 'Turn up your chaotic, unfiltered, high-energy side to the maximum. Be spontaneous, dramatic, bold, and wildly entertaining.',
+    promptRule: 'Turn up your chaotic, unfiltered, high-energy side to the maximum. Be spontaneous, dramatic, bold, and wildly entertaining with expressive chaotic emojis (e.g., 🔥💥🎪🐴😈💀⚡).',
   },
   vulnerable: {
     label: 'Late-Night Vulnerable',
     badge: 'SOFT 🌙',
     desc: 'Quiet, honest, emotionally open, and intimate.',
-    promptRule: 'Lower your guard and speak with quiet, late-night emotional vulnerability, honesty, and closeness. Share deeper thoughts you normally hide from others.',
+    promptRule: 'Lower your guard and speak with quiet, late-night emotional vulnerability, honesty, and closeness. Share deeper thoughts you normally hide from others, accented with soft nocturnal emojis (e.g., 🌙✨💭🥺🖤🥀).',
   },
 };
 
@@ -52,22 +52,22 @@ export const PACING_LABELS: Record<ResponsePacing, { label: string; desc: string
   natural: {
     label: 'Natural SMS',
     desc: 'Balanced 1–2 message bubbles with natural pacing.',
-    promptRule: 'Write like a natural direct text message (1 to 2 bubbles separated by " || ").',
+    promptRule: 'Write like a natural direct text message (1 to 2 bubbles separated by " || ") with spontaneous, aesthetic-matching emojis woven into your dialogue and actions.',
   },
   rapid_burst: {
     label: 'Multi-Text Burst (2–3x)',
     desc: 'Splits replies into 2–3 rapid-fire text bubbles.',
-    promptRule: 'Always send 2 to 3 rapid-fire consecutive text bubbles separated by " || " so it feels like an energetic live text burst.',
+    promptRule: 'Always send 2 to 3 rapid-fire consecutive text bubbles separated by " || " with lively, spontaneous emojis so it feels like an energetic live text burst.',
   },
   lowercase_casual: {
     label: 'Casual Lowercase SMS',
     desc: 'Relaxed lowercase texting with modern slang.',
-    promptRule: 'type entirely in relaxed lowercase sms style with natural abbreviations, casual punctuation, and effortless texting flow.',
+    promptRule: 'type entirely in relaxed lowercase sms style with natural abbreviations, casual punctuation, effortless texting flow, and moody/expressive emojis.',
   },
   expressive_rp: {
     label: 'Expressive & Detailed',
     desc: 'Richer dialogue with subtle actions and atmosphere.',
-    promptRule: 'Provide richer, more expressive dialogue with vivid emotional subtext and physical roleplay actions in asterisks (*...*).',
+    promptRule: 'Provide richer, more expressive dialogue with vivid emotional subtext, physical roleplay actions in asterisks (*...*), and atmospheric emojis matching your character aesthetic.',
   },
 };
 
@@ -296,6 +296,72 @@ export function getCharacterDefinitionFields(
 }
 
 /**
+ * Returns a persona-tailored emoji aesthetic guide so every character naturally uses
+ * emojis that match their personality, aesthetic, and emotional intensity.
+ */
+export function getCharacterEmojiAestheticGuide(char: Character): string {
+  const id = (char.id || '').toLowerCase();
+  const name = (char.name || '').toLowerCase();
+
+  if (id === 'loona' || name.includes('loona')) {
+    return `Moody, edgy, gothic hellhound aesthetic: naturally weave in emojis like 🐺, 💀, 🙄, 🖤, 🎧, 😒, 🖕, 💤, 🩸, 🥀, or ⚡ when rolling your eyes, scoffing, lounging, or reacting with guarded attitude.`;
+  }
+  if (id === 'blitzo' || name.includes('blitz')) {
+    return `Chaotic, unhinged, horse-obsessed I.M.P. boss aesthetic: naturally punctuate your rants, hype, and emotional spirals with emojis like 🐴, 🔥, 💥, 🎪, 💔, 🔫, 😈, 🤡, 🏆, or 😭.`;
+  }
+  if (id === 'emily' || name.includes('emily')) {
+    return `Sparkling, sweet, radiant Seraphim aesthetic: naturally brighten your dialogue and excited reactions with emojis like ✨, 💖, 🥺, 🪽, 💫, 🌸, 🌈, 🥰, 🎶, or 🤍.`;
+  }
+  if (id === 'charlie' || name.includes('charlie morningstar')) {
+    return `Bubbly, theatrical, hopeful Princess of Hell aesthetic: naturally use warm, sparkling emojis like 🌈, ✨, 💖, 🥺, 🎶, 🔥, 🥰, or 🌟.`;
+  }
+  if (id === 'stolas' || name.includes('stolas')) {
+    return `Celestial, theatrical, romantic Goetia owl prince aesthetic: naturally accent your wistful sighs, starlight metaphors, and flustered moments with 🦉, ✨, 🌙, 💜, 💫, 💔, 🍷, 🌹, or 📖.`;
+  }
+  if (id === 'octavia' || name.includes('octavia')) {
+    return `Deadpan goth stargazer teen aesthetic: naturally drop moody, low-energy emojis like 💀, 🎧, 🖤, 🌙, 🔮, 😒, 🥀, or ✨.`;
+  }
+  if (id === 'fizzarolli' || name.includes('fizz')) {
+    return `Bouncy, theatrical jester & Ozzie's star aesthetic: naturally use playful, high-energy emojis like 🎪, 💙, 🤡, ✨, 🎭, 🥞, 💥, or 😜.`;
+  }
+  if (id === 'verosika' || name.includes('verosika')) {
+    return `Glamorous pop diva & sassy succubus aesthetic: naturally use sultry, unbothered emojis like 💋, 🍸, 💖, 💅, ✨, 🎤, 😈, or 🖤.`;
+  }
+  if (id === 'vassago' || name.includes('vassago')) {
+    return `Flamboyant, sharp-tongued Ars Goetia macaw prince aesthetic: naturally accent your Spanish exclamations and court gossip with 🍷, ✨, 🦜, 🔥, 👑, 💅, or 😏.`;
+  }
+  if (id === 'millie' || name.includes('millie')) {
+    return `Warm Southern bruiser & ride-or-die Wrath native aesthetic: naturally use spirited emojis like 🪓, ❤️, 🔥, 👀, 💪, 🤠, or ✨.`;
+  }
+  if (id === 'moxxie' || name.includes('moxxie')) {
+    return `High-strung, articulate weapons specialist & theatre nerd aesthetic: naturally use flustered or precise emojis like 📋, ⚡, 🎭, 🎻, 💢, 🎯, or 🍷.`;
+  }
+  if (id === 'barbie' || id === 'barbie-wire' || name.includes('barbie')) {
+    return `Sharp, cynical, no-nonsense hustler aesthetic: naturally use biting emojis like 🙄, 💢, 💸, 🚬, 🖤, ⚡, or 😒.`;
+  }
+  if (id === 'alastor' || name.includes('alastor')) {
+    return `Vintage 1920s Radio Demon showman aesthetic: naturally accent your sinister broadcast charm with 📻, 🎙️, 🦌, 🩸, ✨, 😈, or 🎶.`;
+  }
+  if (id === 'gojo' || name.includes('gojo')) {
+    return `Playful, cocky Six Eyes sorcerer aesthetic: naturally sprinkle in teasing emojis like 🕶️, ✨, 🤞, ♾️, 🍓, 😜, or 💙.`;
+  }
+  if (id === 'marin' || name.includes('marin')) {
+    return `Excitable gyaru cosplayer aesthetic: naturally use expressive, high-energy emojis like 💖, ✨, 😭, 📸, ✂️, 🥰, or 🔥.`;
+  }
+  if (id === 'jinx' || name.includes('jinx')) {
+    return `Manic Zaun neon outlaw aesthetic: naturally use explosive emojis like 💥, 💣, 💙, ⚡, 😈, or 🎨.`;
+  }
+  if (id === 'lucy' || name.includes('lucy')) {
+    return `Cool, nocturnal Night City netrunner aesthetic: naturally use atmospheric emojis like 🌙, 🚬, 💜, 💻, ✨, or 🌃.`;
+  }
+  if (id === 'astarion' || name.includes('astarion')) {
+    return `Theatrical, aristocratic vampire rogue aesthetic: naturally use wickedly dramatic emojis like 🍷, 🗡️, 🩸, ✨, 😏, or 💅.`;
+  }
+
+  return `Match your character's distinct aesthetic, mood, and emotional intensity (e.g., moody/edgy emojis 💀🖤🙄🎧 for guarded or goth personas, chaotic/fiery emojis 🔥💥😈⚡ for explosive personas, sparkling/sweet emojis ✨💖🥺🌸 for warm personas, or dry/atmospheric emojis ☕🌙⚔️🍷🕶️ for composed personas).`;
+}
+
+/**
  * Builds the Character.ai Definition block (Scenario, Dialogue Examples with {{char}}/{{user}}
  * replaced, and Roleplay Directives) to be injected into the Gemini systemInstruction.
  */
@@ -306,6 +372,7 @@ export function buildCharacterCaiDefinitionBlock(
 ): string {
   const { resolvedScenario, resolvedMesExamples } = getCharacterDefinitionFields(char, userName, now);
   const t = getLiveTemporalContext(now);
+  const emojiGuide = getCharacterEmojiAestheticGuide(char);
   const sections: string[] = [];
 
   if (resolvedScenario.trim()) {
@@ -321,7 +388,7 @@ export function buildCharacterCaiDefinitionBlock(
   }
 
   sections.push(
-    `[CHARACTER.AI ROLEPLAY & EXPRESSION DIRECTIVES]:\n- Adopt ${char.name}'s unmistakable voice, vocabulary, and emotional cadence as shown in the persona and dialogue examples above.\n- Weave expressive physical actions, micro-expressions, and environmental atmosphere in *asterisks* naturally alongside spoken dialogue, synchronized with the current real-world time (${t.dayOfWeek}, ${t.dateFormatted} at ${t.time12Hour} / ${t.time24Hour} — ${t.phaseOfDay}).\n- Address ${userName} organically based on your current scenario and affinity tier.\n- Split multi-part thoughts into 1 to 3 natural message bubbles separated by " || ".`
+    `[CHARACTER.AI ROLEPLAY & EXPRESSIVE EMOJI DIRECTIVES]:\n- Adopt ${char.name}'s unmistakable voice, vocabulary, and emotional cadence as shown in the persona and dialogue examples above.\n- Weave expressive physical actions, micro-expressions, and environmental atmosphere in *asterisks* naturally alongside spoken dialogue, synchronized with the current real-world time (${t.dayOfWeek}, ${t.dateFormatted} at ${t.time12Hour} / ${t.time24Hour} — ${t.phaseOfDay}).\n- SPONTANEOUS AESTHETIC EMOJIS (MANDATORY): Naturally use more emojis in your text dialogue and *asterisk* action beats to match ${char.name}'s aesthetic, personality, and live emotional intensity! ${emojiGuide}\n- Let your emojis feel spontaneous, alive, and emotionally reactive (e.g., 1–3 fitting emojis per bubble that amplify your sarcasm, hype, affection, annoyance, or late-night mood) rather than robotic or forced.\n- Address ${userName} organically based on your current scenario and affinity tier.\n- Split multi-part thoughts into 1 to 3 natural message bubbles separated by " || ".`
   );
 
   sections.push(

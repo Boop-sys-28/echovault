@@ -195,6 +195,7 @@ function getExplicitCustomApiKey(): string {
       'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw',
       'AQ.Ab8RN6KeetZWTWlQXdP_5ZwaCZsFG0P5lVOKVbsOcg20CExwBA',
       'AQ.Ab8RN6K4pHZaYJMWUHLx_dTwv9WjFpfo4zs91jGAwNQQucCm_w',
+      'AQ.Ab8RN6IowPhFelUzQKdyVBMLVZZ76mSNG3Stpk7aCKntlYV4lg',
     ];
     if (trimmed && legacyDefaultKeys.includes(trimmed)) {
       localStorage.removeItem('custom_gemini_api_key');
