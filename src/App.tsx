@@ -63,6 +63,8 @@ import {
   replaceCharacterMacros,
   getCharacterDefinitionFields,
   buildCharacterCaiDefinitionBlock,
+  getLiveTemporalContext,
+  buildLiveTemporalPromptBlock,
 } from './utils/responseDirector';
 import {
   formatBubbleTimestamp,
@@ -1108,14 +1110,16 @@ export default function App() {
   /**
    * Builds the full character system instruction combining `system`, `systemInstruction`,
    * Character.ai `scenario` & `mesExamples` (with {{char}} and {{user}} variable replacement),
+   * live real-world temporal synchronization (day of week, date, 12h/24h time, and phase of day),
    * live relationship bondScore/tier context, Response Director overrides, AND all extracted
    * episodic memories from MemoryVaultModal / localStorage for the character.
    */
   const buildFullCharacterSystemPrompt = (char: Character, explicitMemories?: string[]): string => {
+    const now = new Date();
     const userName = currentUser?.codename || currentUser?.username || 'You';
     const directive = getCharacterDirective(char.id);
     const rawPrimarySystem = directive.systemOverride || char.system || char.systemInstruction || '';
-    const primarySystem = replaceCharacterMacros(rawPrimarySystem, char.name, userName);
+    const primarySystem = replaceCharacterMacros(rawPrimarySystem, char.name, userName, now);
     const rawExtraSystem =
       !directive.systemOverride &&
       char.systemInstruction &&
@@ -1123,8 +1127,9 @@ export default function App() {
       !char.system.includes(char.systemInstruction)
         ? `\n\n[ADDITIONAL CANON LORE & CONTINUITY]:\n${char.systemInstruction}`
         : '';
-    const extraSystem = replaceCharacterMacros(rawExtraSystem, char.name, userName);
-    const caiDefinitionBlock = buildCharacterCaiDefinitionBlock(char, userName);
+    const extraSystem = replaceCharacterMacros(rawExtraSystem, char.name, userName, now);
+    const caiDefinitionBlock = buildCharacterCaiDefinitionBlock(char, userName, now);
+    const liveTemporalBlock = buildLiveTemporalPromptBlock(char.name, userName, now);
     const currentAffinity = relationshipLevels[char.id] ?? 0;
     const currentTier = getRelationshipTierFromAffinity(currentAffinity);
     const bondToneGuidance = buildBondToneInstruction(currentAffinity, char.name);
@@ -1137,7 +1142,7 @@ export default function App() {
       char.id,
       explicitMemories ?? charMemories[char.id]
     );
-    return `${primarySystem}${extraSystem}${caiDefinitionBlock}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${memoryVaultBlock}${directiveBlock}`;
+    return `${primarySystem}${extraSystem}${caiDefinitionBlock}${liveTemporalBlock}${BASELINE_RELATIONSHIP_PROMPT_BLOCK}${dynamicRelationshipBlock}${memoryVaultBlock}${directiveBlock}`;
   };
 
   /**
@@ -1152,6 +1157,11 @@ export default function App() {
     let lastStatus = 500;
     let lastData: any = {};
     const trimmedKey = (customKey || '').trim();
+    const liveTemporalContext = getLiveTemporalContext(new Date());
+    const enrichedPayload = {
+      ...payload,
+      temporalContext: payload.temporalContext || liveTemporalContext,
+    };
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
@@ -1170,7 +1180,7 @@ export default function App() {
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers,
-          body: JSON.stringify(payload),
+          body: JSON.stringify(enrichedPayload),
         });
         const data = await res.json().catch(() => ({}));
         lastStatus = res.status;

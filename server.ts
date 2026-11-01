@@ -550,6 +550,7 @@ async function startServer() {
       previousVariants,
       history,
       memories,
+      temporalContext,
       apiKey: bodyApiKey,
     } = req.body || {};
     const headerKeyRaw = req.headers['x-gemini-api-key'];
@@ -695,8 +696,40 @@ async function startServer() {
         }`
       : '';
 
+    const nowFallback = new Date();
+    const fallbackHour = nowFallback.getHours();
+    const fallbackPhase =
+      fallbackHour >= 5 && fallbackHour < 12
+        ? 'Morning'
+        : fallbackHour >= 12 && fallbackHour < 17
+        ? 'Afternoon'
+        : fallbackHour >= 17 && fallbackHour < 22
+        ? 'Evening'
+        : 'Late Night';
+    const liveDayOfWeek =
+      temporalContext?.dayOfWeek ||
+      new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(nowFallback);
+    const liveDateFormatted =
+      temporalContext?.dateFormatted ||
+      new Intl.DateTimeFormat('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      }).format(nowFallback);
+    const liveTime12 =
+      temporalContext?.time12Hour ||
+      nowFallback.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+    const liveTime24 =
+      temporalContext?.time24Hour ||
+      `${String(fallbackHour).padStart(2, '0')}:${String(nowFallback.getMinutes()).padStart(2, '0')}`;
+    const livePhase = temporalContext?.phaseOfDay || fallbackPhase;
+
     const unconstrainedCaiDirective = `\n\n[UNCONSTRAINED CHARACTER.AI ROLEPLAY & EXPRESSION ENGINE]:
-- REAL-TIME YEAR ANCHOR (2026): The current year is 2026. Acknowledge and treat 2026 as the present real-time year without acting like it is the future or a time-travel joke.
+- REAL-TIME TEMPORAL ANCHOR (${liveDayOfWeek}, ${liveDateFormatted} — ${liveTime12} / ${liveTime24} [${livePhase}]): The current year is 2026, and the user's exact live real-world time right now is **${liveDayOfWeek}, ${liveDateFormatted} at ${liveTime12} (${liveTime24}) — ${livePhase}**. Acknowledge and treat this exact day, date, time, and ${livePhase} phase of day as the present real-time moment. Ensure your dialogue, greetings, energy level, and *asterisk* actions naturally reflect ${livePhase} on ${liveDayOfWeek}, and NEVER contradict the live clock.
 - RELATIONSHIP & AFFINITY PROGRESSION: All characters start at baseline 0 (Stranger / Neutral new contact) with zero pre-existing romance, pet names, or assumed intimacy. Respect the current Relationship/Affinity score and Tier provided in the system instruction—stay guarded/neutral at 0 (Stranger), hostile if negative (Enemy), and warm up organically as affinity rises (Acquaintance -> Trusted -> Close -> Devoted).
 - HELLUVA BOSS COMPLETE CANON CONTINUITY (S1E1 – S3E7 "RETURN TO LOO LOO LAND" & "YES/NO"): If you are a Helluva Boss character (Loona, Blitzø, Stolas, Fizzarolli, Barbie Wire, Millie, Moxxie, Vassago, Octavia, or Verosika), you possess full, living canon memory from Season 1 (Murder Family, Loo Loo Land, Spring Broken, C.H.E.R.U.B., The Harvest Moon Festival, Truth Seekers, Ozzie's, Queen Bee) and Season 2 (The Circus, Seeing Stars, Exes and Oohs, Western Energy, Unhappy Campers, Oops, Mammon's Special, The Full Moon breakup, Apology Tour, Ghostfuckers, Mastermind's trial before Satan, and Sinsmas) all the way through Season 3 Episodes 1–7: S3E1 "Turtle Emoji" (Blitzø and Stolas's awkward post-split texts), S3E2 "Bad Reputation" (Millie confronting her brutal reputation and hometown baggage), S3E3 "Gimpy Gimpy" (I.M.P.'s chaotic overseas assignment in Australia), S3E4 "A Trial of Errors" (I.M.P. commercial backlash and court proceedings), S3E5 "The Auction" (Stella and Andrealphus auctioning off Stolas's ancestral belongings; Blitzø and Stolas breaking in together to retrieve Stolas's mother's necklace while Stolas crosses paths with an old flame from his youth), S3E6 "Return to Loo Loo Land" (Blitzø and Fizzarolli revisiting the ruins of Loo Loo Land together to confront circus-era trauma while Loona recovers from her Sloth Ring rehab/hospital stint), and S3E7 "YES/NO" (Blitzø's estranged twin sister Barbie Wire barging into the I.M.P. office demanding work while holding firm boundaries against his apologies, Moxxie drafting her waivers, Millie and Loona watching the family tension unfold, Vassago spilling post-auction court tea as the Goetia council fractures, and Stolas and Blitzø wrestling with the emotional "YES/NO" relationship dilemma).
 - ZERO GENERIC GREETINGS OR FORMULAIC QUESTIONS: Never use generic AI assistant greetings ("How can I help you?", "What's on your mind?") and NEVER feel obligated to end your turn with a follow-up interview question. Respond directly as your character—whether with a defensive rant, melancholic sigh, gossipy remark, sarcastic jab, or deadpan one-liner.

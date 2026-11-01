@@ -118,23 +118,145 @@ export function clearCharacterDirective(charId: string): Record<string, Characte
   return all;
 }
 
+export type DayPhase = 'Morning' | 'Afternoon' | 'Evening' | 'Late Night';
+
+export interface LiveTemporalContext {
+  dayOfWeek: string;
+  dateFormatted: string;
+  isoDate: string;
+  time12Hour: string;
+  time24Hour: string;
+  phaseOfDay: DayPhase;
+  phaseDescription: string;
+  timeZone: string;
+  isWeekend: boolean;
+  timestampMs: number;
+}
+
 /**
- * Replaces Character.ai template macros ({{char}}, {{user}}, <BOT>, <USER>)
- * with the active character's name and active user's handle/codename.
+ * Computes the user's live real-world temporal context (day of the week, full date,
+ * 12-hour & 24-hour clock time, and phase of day: Morning / Afternoon / Evening / Late Night).
+ */
+export function getLiveTemporalContext(now: Date = new Date()): LiveTemporalContext {
+  const dayOfWeek = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(now);
+  const dateFormatted = new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(now);
+
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const isoDate = `${year}-${month}-${day}`;
+
+  const time12Hour = now.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const hours24 = String(now.getHours()).padStart(2, '0');
+  const minutes24 = String(now.getMinutes()).padStart(2, '0');
+  const time24Hour = `${hours24}:${minutes24}`;
+
+  const hour = now.getHours();
+  let phaseOfDay: DayPhase;
+  let phaseDescription: string;
+
+  if (hour >= 5 && hour < 12) {
+    phaseOfDay = 'Morning';
+    phaseDescription =
+      'Morning hours (05:00–11:59) — early daylight, coffee/breakfast routines, waking up, or starting the day’s schedule.';
+  } else if (hour >= 12 && hour < 17) {
+    phaseOfDay = 'Afternoon';
+    phaseDescription =
+      'Afternoon hours (12:00–16:59) — midday activity, lunch or mid-shift pace, peak daytime energy.';
+  } else if (hour >= 17 && hour < 22) {
+    phaseOfDay = 'Evening';
+    phaseDescription =
+      'Evening hours (17:00–21:59) — sunset/dusk into night, winding down from work, dinner, or evening hangouts.';
+  } else {
+    phaseOfDay = 'Late Night';
+    phaseDescription =
+      'Late Night / after-hours (22:00–04:59) — quiet nocturnal hours, late-night scrolling, exhaustion, insomnia, or night-owl energy.';
+  }
+
+  let timeZone = 'Local Time';
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local Time';
+  } catch {
+    // ignore
+  }
+
+  const dayNum = now.getDay();
+  const isWeekend = dayNum === 0 || dayNum === 6;
+
+  return {
+    dayOfWeek,
+    dateFormatted,
+    isoDate,
+    time12Hour,
+    time24Hour,
+    phaseOfDay,
+    phaseDescription,
+    timeZone,
+    isWeekend,
+    timestampMs: now.getTime(),
+  };
+}
+
+/**
+ * Builds the authoritative real-world temporal synchronization block injected into
+ * every character generation's systemInstruction so dialogue naturally reflects the exact live time.
+ */
+export function buildLiveTemporalPromptBlock(
+  charName: string = 'Character',
+  userName: string = 'You',
+  now: Date = new Date()
+): string {
+  const t = getLiveTemporalContext(now);
+  const safeChar = (charName || 'Character').trim();
+  const safeUser = (userName || 'You').trim();
+
+  return `\n\n[LIVE REAL-WORLD TEMPORAL SYNCHRONIZATION — ACTIVE CLOCK & PHASE OF DAY]:
+- Current Day of the Week: ${t.dayOfWeek} (${t.isWeekend ? 'Weekend' : 'Weekday'})
+- Current Calendar Date: ${t.dateFormatted} (${t.isoDate})
+- Current Local Time (12-Hour / 24-Hour): ${t.time12Hour} / ${t.time24Hour} (${t.timeZone})
+- Current Phase of Day: ${t.phaseOfDay} — ${t.phaseDescription}
+- TEMPORAL DIALOGUE SYNCHRONIZATION RULES (MANDATORY):
+  1. You (${safeChar}) and ${safeUser} are texting in real time right now on ${t.dayOfWeek}, ${t.dateFormatted} at ${t.time12Hour} (${t.time24Hour}, ${t.phaseOfDay}).
+  2. Ensure your dialogue, greetings, environmental cues, and *asterisk* actions naturally reflect that it is currently **${t.phaseOfDay}** (${t.time12Hour} / ${t.time24Hour}) on a **${t.dayOfWeek}**.
+  3. NEVER contradict the live clock or phase of day (for example, do NOT say "Good night" or act like it is 2:00 AM when it is ${t.phaseOfDay} at ${t.time12Hour}, and do NOT act like it is bright morning when it is Late Night).
+  4. If ${safeUser} asks for the current time, day, or date—or if the conversation touches on schedules, meals, sleep, work shifts, or weekend/weekday plans—anchor your response directly to **${t.dayOfWeek}, ${t.dateFormatted} at ${t.time12Hour} (${t.time24Hour} — ${t.phaseOfDay})** in your authentic canon voice.`;
+}
+
+/**
+ * Replaces Character.ai template macros ({{char}}, {{user}}, <BOT>, <USER>,
+ * plus live temporal macros {{time}}, {{time24}}, {{date}}, {{day}}, {{weekday}}, {{phase}})
+ * with the active character's name, active user's handle/codename, and live clock values.
  */
 export function replaceCharacterMacros(
   rawText: string,
   charName: string,
-  userName: string = 'You'
+  userName: string = 'You',
+  now: Date = new Date()
 ): string {
   if (!rawText) return '';
   const safeChar = (charName || 'Character').trim();
   const safeUser = (userName || 'You').trim();
+  const t = getLiveTemporalContext(now);
   return rawText
     .replace(/\{\{\s*char\s*\}\}/gi, safeChar)
     .replace(/\{\{\s*user\s*\}\}/gi, safeUser)
     .replace(/<\s*BOT\s*>/gi, safeChar)
-    .replace(/<\s*USER\s*>/gi, safeUser);
+    .replace(/<\s*USER\s*>/gi, safeUser)
+    .replace(/\{\{\s*time\s*\}\}/gi, `${t.time12Hour} (${t.time24Hour})`)
+    .replace(/\{\{\s*time12\s*\}\}/gi, t.time12Hour)
+    .replace(/\{\{\s*time24\s*\}\}/gi, t.time24Hour)
+    .replace(/\{\{\s*(?:day|weekday)\s*\}\}/gi, t.dayOfWeek)
+    .replace(/\{\{\s*date\s*\}\}/gi, t.dateFormatted)
+    .replace(/\{\{\s*phase\s*\}\}/gi, t.phaseOfDay);
 }
 
 /**
@@ -144,7 +266,8 @@ export function replaceCharacterMacros(
  */
 export function getCharacterDefinitionFields(
   char: Character,
-  userName: string = 'You'
+  userName: string = 'You',
+  now: Date = new Date()
 ): {
   rawScenario: string;
   rawMesExamples: string;
@@ -167,8 +290,8 @@ export function getCharacterDefinitionFields(
   return {
     rawScenario,
     rawMesExamples,
-    resolvedScenario: replaceCharacterMacros(rawScenario, char.name, userName),
-    resolvedMesExamples: replaceCharacterMacros(rawMesExamples, char.name, userName),
+    resolvedScenario: replaceCharacterMacros(rawScenario, char.name, userName, now),
+    resolvedMesExamples: replaceCharacterMacros(rawMesExamples, char.name, userName, now),
   };
 }
 
@@ -178,25 +301,27 @@ export function getCharacterDefinitionFields(
  */
 export function buildCharacterCaiDefinitionBlock(
   char: Character,
-  userName: string = 'You'
+  userName: string = 'You',
+  now: Date = new Date()
 ): string {
-  const { resolvedScenario, resolvedMesExamples } = getCharacterDefinitionFields(char, userName);
+  const { resolvedScenario, resolvedMesExamples } = getCharacterDefinitionFields(char, userName, now);
+  const t = getLiveTemporalContext(now);
   const sections: string[] = [];
 
   if (resolvedScenario.trim()) {
     sections.push(
-      `[CHARACTER.AI SCENARIO & CURRENT SETTING]:\n${resolvedScenario.trim()}`
+      `[CHARACTER.AI SCENARIO & CURRENT SETTING (LIVE TIME: ${t.dayOfWeek}, ${t.dateFormatted} — ${t.time12Hour} / ${t.time24Hour} ${t.phaseOfDay})]:\n${resolvedScenario.trim()}`
     );
   }
 
   if (resolvedMesExamples.trim()) {
     sections.push(
-      `[CHARACTER.AI DIALOGUE EXAMPLES (mesExamples — VOICE, CADENCE & FORMATTING REFERENCE)]:\nThe following example exchanges demonstrate how ${char.name} speaks, acts in *asterisks*, and formats replies with ${userName}. Mirror this exact vocal personality, emotional rhythm, and roleplay style without repeating these example lines verbatim:\n${resolvedMesExamples.trim()}`
+      `[CHARACTER.AI DIALOGUE EXAMPLES (mesExamples — VOICE, CADENCE & FORMATTING REFERENCE)]:\nThe following example exchanges demonstrate how ${char.name} speaks, acts in *asterisks*, and formats replies with ${userName}. Mirror this exact vocal personality, emotional rhythm, and roleplay style without repeating these example lines verbatim (and adapt any time-of-day references to the current live time: ${t.dayOfWeek} ${t.time12Hour} / ${t.time24Hour} ${t.phaseOfDay}):\n${resolvedMesExamples.trim()}`
     );
   }
 
   sections.push(
-    `[CHARACTER.AI ROLEPLAY & EXPRESSION DIRECTIVES]:\n- Adopt ${char.name}'s unmistakable voice, vocabulary, and emotional cadence as shown in the persona and dialogue examples above.\n- Weave expressive physical actions, micro-expressions, and environmental atmosphere in *asterisks* naturally alongside spoken dialogue.\n- Address ${userName} organically based on your current scenario and affinity tier.\n- Split multi-part thoughts into 1 to 3 natural message bubbles separated by " || ".`
+    `[CHARACTER.AI ROLEPLAY & EXPRESSION DIRECTIVES]:\n- Adopt ${char.name}'s unmistakable voice, vocabulary, and emotional cadence as shown in the persona and dialogue examples above.\n- Weave expressive physical actions, micro-expressions, and environmental atmosphere in *asterisks* naturally alongside spoken dialogue, synchronized with the current real-world time (${t.dayOfWeek}, ${t.dateFormatted} at ${t.time12Hour} / ${t.time24Hour} — ${t.phaseOfDay}).\n- Address ${userName} organically based on your current scenario and affinity tier.\n- Split multi-part thoughts into 1 to 3 natural message bubbles separated by " || ".`
   );
 
   return `\n\n${sections.join('\n\n')}`;
