@@ -4,42 +4,42 @@ dotenv.config();
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { GoogleGenAI } from '@google/genai';
 
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
-const DEFAULT_CONFIGURED_GEMINI_KEY =
-  'AQ.Ab8RN6J3YDA2B2UyD5u6nbL-gwPwngVmsE_UvBg8R4chB5ewVw';
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
+const OPENROUTER_REFERER = 'https://echovault-or9c.onrender.com';
+const OPENROUTER_TITLE = 'EchoVault';
 
-function isStaleToken(key: string): boolean {
-  const k = key.trim();
+const CANDIDATE_MODELS = [
+  OPENROUTER_MODEL,
+  `${OPENROUTER_MODEL}:free`,
+];
+
+function isPlaceholderKey(key: string): boolean {
+  const k = (key || '').trim();
   return (
     !k ||
+    k === 'MY_OPENROUTER_API_KEY' ||
+    k === 'YOUR_OPENROUTER_API_KEY' ||
     k === 'MY_GEMINI_API_KEY' ||
-    k === 'YOUR_GEMINI_API_KEY' ||
-    k.startsWith('AQ.Ab8RN6KdKpn8X4') ||
-    k.startsWith('AQ.Ab8RN6KeetZWTW') ||
-    k.startsWith('AQ.Ab8RN6K4pHZaY')
+    k === 'YOUR_GEMINI_API_KEY'
   );
 }
 
-// Ensure process.env.GEMINI_API_KEY uses the active configured key if the container env has a stale token
-if (!process.env.GEMINI_API_KEY || isStaleToken(process.env.GEMINI_API_KEY)) {
-  process.env.GEMINI_API_KEY = DEFAULT_CONFIGURED_GEMINI_KEY;
-}
-
 /**
- * Helper to resolve the active Gemini API key from environment, .env file, or configured default.
+ * Helper to resolve the active OpenRouter API key from process.env.OPENROUTER_API_KEY or .env file.
  */
-function getActiveGeminiKey(): string {
+function getActiveOpenRouterKey(): string {
   try {
     if (fs.existsSync(ENV_FILE_PATH)) {
       const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
-      const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
+      const match = content.match(/^OPENROUTER_API_KEY=(.+)$/m);
       if (match && match[1]) {
         const fileKey = match[1].trim().replace(/^["']|["']$/g, '');
-        if (fileKey && !isStaleToken(fileKey) && fileKey.length > 10) {
-          process.env.GEMINI_API_KEY = fileKey;
+        if (fileKey && !isPlaceholderKey(fileKey) && fileKey.length > 10) {
+          process.env.OPENROUTER_API_KEY = fileKey;
           return fileKey;
         }
       }
@@ -48,20 +48,20 @@ function getActiveGeminiKey(): string {
     // ignore read error
   }
 
-  const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
-  if (envKey && !isStaleToken(envKey) && envKey.trim().length > 10) {
+  const envKey = process.env.OPENROUTER_API_KEY || '';
+  if (envKey && !isPlaceholderKey(envKey) && envKey.trim().length > 10) {
     return envKey.trim();
   }
 
-  return DEFAULT_CONFIGURED_GEMINI_KEY;
+  return '';
 }
 
 /**
- * Persists a new GEMINI_API_KEY into process.env and writes it to `.env`
+ * Persists a new OPENROUTER_API_KEY into process.env and writes it to `.env`
  */
-function saveGeminiKey(newKey: string): void {
+function saveOpenRouterKey(newKey: string): void {
   const cleanKey = newKey.trim();
-  process.env.GEMINI_API_KEY = cleanKey;
+  process.env.OPENROUTER_API_KEY = cleanKey;
 
   try {
     let envContent = '';
@@ -69,31 +69,22 @@ function saveGeminiKey(newKey: string): void {
       envContent = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
     }
 
-    if (/^GEMINI_API_KEY=.*$/m.test(envContent)) {
-      envContent = envContent.replace(/^GEMINI_API_KEY=.*$/m, `GEMINI_API_KEY=${cleanKey}`);
+    if (/^OPENROUTER_API_KEY=.*$/m.test(envContent)) {
+      envContent = envContent.replace(
+        /^OPENROUTER_API_KEY=.*$/m,
+        `OPENROUTER_API_KEY=${cleanKey}`
+      );
     } else {
-      envContent = `${envContent.trim()}\nGEMINI_API_KEY=${cleanKey}\n`.trimStart();
+      envContent = `${envContent.trim()}\nOPENROUTER_API_KEY=${cleanKey}\n`.trimStart();
     }
 
     fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
   } catch (err) {
-    console.warn('Could not write GEMINI_API_KEY to .env file (kept in memory):', err);
+    console.warn('Could not write OPENROUTER_API_KEY to .env file (kept in memory):', err);
   }
 }
 
-const CANDIDATE_MODELS = [
-  'gemini-robotics-er-2-preview',
-  'gemini-flash-lite-latest',
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemini-3.1-flash-lite',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-3-flash-preview',
-  'gemini-flash-latest',
-];
-
-function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 16000): Promise<T> {
+function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 22000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`MODEL_TIMEOUT after ${timeoutMs}ms`));
@@ -110,102 +101,64 @@ function withModelTimeout<T>(promise: Promise<T>, timeoutMs: number = 16000): Pr
   });
 }
 
-function createGenAiClient(apiKey: string): GoogleGenAI {
-  const trimmedKey = apiKey.trim();
-  return new GoogleGenAI({
-    apiKey: trimmedKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+interface OpenRouterMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
 
 /**
- * Executes generateContent for a candidate model.
- * Uses the GoogleGenAI SDK client first, and if an `AQ.` token returns `ACCESS_TOKEN_TYPE_UNSUPPORTED`
- * (or 401), retries via standard REST fetch with `Authorization: Bearer <KEY>`.
- * Preserves 429/503/404 status codes so the candidate model loop advances cleanly.
+ * Executes an OpenRouter chat completion request against
+ * https://openrouter.ai/api/v1/chat/completions with required headers
+ * HTTP-Referer: https://echovault-or9c.onrender.com and X-Title: EchoVault.
  */
-async function generateContentWithKey(
+async function generateOpenRouterCompletion(
   apiKey: string,
-  ai: GoogleGenAI,
   params: {
     model: string;
-    contents: any;
-    config?: {
-      systemInstruction?: string;
-      temperature?: number;
-      topP?: number;
-    };
+    messages: OpenRouterMessage[];
+    temperature?: number;
+    topP?: number;
   }
-): Promise<{ text: string }> {
+): Promise<{ text: string; modelUsed: string }> {
   const trimmedKey = apiKey.trim();
 
-  try {
-    const response = await ai.models.generateContent(params);
-    return { text: response.text || '' };
-  } catch (sdkErr: any) {
-    const sdkMsg = String(sdkErr?.message || '');
-    // Only attempt Authorization: Bearer fallback if the key begins with AQ. and SDK returned 401 / ACCESS_TOKEN_TYPE_UNSUPPORTED
-    if (
-      trimmedKey.startsWith('AQ.') &&
-      (sdkErr?.status === 401 || sdkMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED'))
-    ) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        params.model
-      )}:generateContent`;
+  const res = await fetch(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${trimmedKey}`,
+      'HTTP-Referer': OPENROUTER_REFERER,
+      'X-Title': OPENROUTER_TITLE,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.95,
+      top_p: params.topP ?? 0.95,
+    }),
+  });
 
-      const normalizedContents =
-        typeof params.contents === 'string'
-          ? [{ role: 'user', parts: [{ text: params.contents }] }]
-          : params.contents;
+  const data: any = await res.json().catch(() => ({}));
 
-      const restPayload: Record<string, any> = {
-        contents: normalizedContents,
-      };
-
-      if (params.config?.systemInstruction) {
-        restPayload.systemInstruction = {
-          parts: [{ text: params.config.systemInstruction }],
-        };
-      }
-
-      if (
-        params.config?.temperature !== undefined ||
-        params.config?.topP !== undefined
-      ) {
-        restPayload.generationConfig = {
-          ...(params.config.temperature !== undefined
-            ? { temperature: params.config.temperature }
-            : {}),
-          ...(params.config.topP !== undefined ? { topP: params.config.topP } : {}),
-        };
-      }
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${trimmedKey}`,
-          'User-Agent': 'aistudio-build',
-        },
-        body: JSON.stringify(restPayload),
-      });
-
-      const data: any = await res.json().catch(() => ({}));
-      if (res.ok) {
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        const text = parts
-          .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
-          .join('');
-        return { text };
-      }
-    }
-
-    throw sdkErr;
+  if (!res.ok) {
+    const rawErrMessage =
+      data?.error?.message ||
+      data?.error?.metadata?.raw ||
+      (typeof data?.error === 'string' ? data.error : '') ||
+      data?.message ||
+      `OpenRouter HTTP ${res.status}`;
+    const err: any = new Error(String(rawErrMessage));
+    err.status = res.status;
+    err.code = data?.error?.code;
+    throw err;
   }
+
+  const content = data?.choices?.[0]?.message?.content;
+  const text = typeof content === 'string' ? content : '';
+  return {
+    text,
+    modelUsed: data?.model || params.model,
+  };
 }
 
 /**
@@ -238,22 +191,27 @@ function formatCharacterBubbles(rawText: string): string {
 }
 
 function isQuotaError(err: any): boolean {
-  const msg = String(err?.message || err || '');
+  const msg = String(err?.message || err || '').toLowerCase();
   return (
     err?.status === 429 ||
+    err?.code === 429 ||
     msg.includes('429') ||
-    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('rate limit') ||
+    msg.includes('resource_exhausted') ||
     msg.includes('quota')
   );
 }
 
 function isInvalidKeyError(err: any): boolean {
-  const msg = String(err?.message || err || '');
+  const msg = String(err?.message || err || '').toLowerCase();
   return (
     err?.status === 401 ||
-    msg.includes('API_KEY_INVALID') ||
-    msg.includes('key not valid') ||
-    msg.includes('invalid api key')
+    err?.code === 401 ||
+    msg.includes('401') ||
+    msg.includes('invalid api key') ||
+    msg.includes('no auth credentials') ||
+    msg.includes('unauthorized') ||
+    msg.includes('user not found')
   );
 }
 
@@ -271,42 +229,40 @@ async function startServer() {
 
   // 1. Check Server AI Status & Masked Key Info
   app.get('/api/status', (_req, res) => {
-    const key = getActiveGeminiKey();
+    const key = getActiveOpenRouterKey();
     const maskedKey =
       key.length > 10 ? `${key.slice(0, 6)}••••••••${key.slice(-4)}` : null;
     res.json({
       hasApiKey: Boolean(key),
       aiConfigured: Boolean(key),
       maskedKey,
-      model: CANDIDATE_MODELS[0],
+      model: OPENROUTER_MODEL,
     });
   });
 
-  // 2. Save & Verify Gemini API Key at Runtime
+  // 2. Save & Verify OpenRouter API Key at Runtime
   app.post('/api/config/key', async (req, res) => {
     try {
       const { apiKey } = req.body;
       if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 15) {
         return res.status(400).json({
           ok: false,
-          error: 'Please enter a valid Gemini API key (starts with AIza...).',
+          error: 'Please enter a valid OpenRouter API key (starts with sk-or-...).',
         });
       }
 
       const candidate = apiKey.trim();
-
-      const ai = createGenAiClient(candidate);
       let verified = false;
       let lastVerifyErr: any = null;
 
       for (const modelName of CANDIDATE_MODELS) {
         try {
           const testResponse = await withModelTimeout(
-            generateContentWithKey(candidate, ai, {
+            generateOpenRouterCompletion(candidate, {
               model: modelName,
-              contents: 'Reply with OK',
+              messages: [{ role: 'user', content: 'Reply with OK' }],
             }),
-            10000
+            12000
           );
           if (testResponse && testResponse.text) {
             verified = true;
@@ -321,17 +277,14 @@ async function startServer() {
         }
       }
 
-      if (!verified && lastVerifyErr) {
-        const msg = String(lastVerifyErr?.message || '');
-        if (msg.includes('API_KEY_INVALID') || msg.includes('key not valid')) {
-          return res.status(400).json({
-            ok: false,
-            error: 'Invalid Gemini API Key. Please check your key in Google AI Studio.',
-          });
-        }
+      if (!verified && lastVerifyErr && isInvalidKeyError(lastVerifyErr)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Invalid OpenRouter API Key. Please check your OPENROUTER_API_KEY.',
+        });
       }
 
-      saveGeminiKey(candidate);
+      saveOpenRouterKey(candidate);
       const maskedKey = `${candidate.slice(0, 6)}••••••••${candidate.slice(-4)}`;
 
       return res.json({
@@ -339,27 +292,25 @@ async function startServer() {
         hasApiKey: true,
         aiConfigured: true,
         maskedKey,
+        model: OPENROUTER_MODEL,
       });
     } catch (error: any) {
       console.error('API key validation error:', error?.message || error);
       return res.status(400).json({
         ok: false,
-        error:
-          error?.message?.includes('API_KEY_INVALID')
-            ? 'Invalid Gemini API Key. Please check your key in Google AI Studio.'
-            : 'Could not verify API key. Please double-check that it is active.',
+        error: 'Could not verify OpenRouter API key. Please double-check that it is active.',
       });
     }
   });
 
   // 3. Remove / Clear Stored API Key
   app.delete('/api/config/key', (_req, res) => {
-    delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
     try {
       if (fs.existsSync(ENV_FILE_PATH)) {
         const envContent = fs
           .readFileSync(ENV_FILE_PATH, 'utf-8')
-          .replace(/^GEMINI_API_KEY=.*$/m, 'GEMINI_API_KEY=');
+          .replace(/^OPENROUTER_API_KEY=.*$/m, 'OPENROUTER_API_KEY=');
         fs.writeFileSync(ENV_FILE_PATH, envContent, 'utf-8');
       }
     } catch {
@@ -537,7 +488,7 @@ async function startServer() {
     }
   });
 
-  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Zero Script Constraints)
+  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (OpenRouter Completion Engine)
   app.post('/api/chat', async (req, res) => {
     const {
       prompt,
@@ -553,7 +504,9 @@ async function startServer() {
       temporalContext,
       apiKey: bodyApiKey,
     } = req.body || {};
-    const headerKeyRaw = req.headers['x-gemini-api-key'];
+
+    const headerKeyRaw =
+      req.headers['x-openrouter-api-key'] || req.headers['x-gemini-api-key'];
     const headerApiKey =
       typeof headerKeyRaw === 'string'
         ? headerKeyRaw.trim()
@@ -561,53 +514,46 @@ async function startServer() {
         ? headerKeyRaw[0]?.trim()
         : '';
     const customApiKey =
-      headerApiKey && !isStaleToken(headerApiKey)
+      headerApiKey && !isPlaceholderKey(headerApiKey)
         ? headerApiKey
-        : typeof bodyApiKey === 'string' && !isStaleToken(bodyApiKey)
+        : typeof bodyApiKey === 'string' && !isPlaceholderKey(bodyApiKey)
         ? bodyApiKey.trim()
         : '';
-    const serverEnvKey = getActiveGeminiKey();
+    const serverEnvKey = getActiveOpenRouterKey();
 
-    // Prioritize valid custom key if explicitly sent from client; otherwise use serverEnvKey (process.env.GEMINI_API_KEY) directly
+    // Prioritize process.env.OPENROUTER_API_KEY and any custom key provided
     const candidateKeys = Array.from(
       new Set(
-        [customApiKey, serverEnvKey, DEFAULT_CONFIGURED_GEMINI_KEY].filter(
-          k => k && k.length > 10
-        )
+        [serverEnvKey, customApiKey].filter(k => k && k.length > 10)
       )
     );
 
     if (candidateKeys.length === 0) {
       return res.status(401).json({
         error: 'INVALID_KEY',
-        message: 'No Gemini API key configured. Open Settings > Intelligence to enter an active Gemini API key.',
+        message:
+          'No OpenRouter API key configured (process.env.OPENROUTER_API_KEY). Add OPENROUTER_API_KEY to your environment or enter your key in Settings > Intelligence.',
         reason: 'NO_API_KEY',
       });
     }
 
-    const formattedContents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+    const conversationMessages: OpenRouterMessage[] = [];
 
     if (Array.isArray(history)) {
       const recentHistory = history.slice(-50);
       for (const turn of recentHistory) {
         if (turn && typeof turn.text === 'string' && turn.text.trim()) {
-          const role = turn.role === 'model' ? 'model' : 'user';
-          // Gemini requires the first turn in contents to have role 'user'
-          if (formattedContents.length === 0 && role === 'model') {
-            formattedContents.push({
-              role: 'user',
-              parts: [{ text: '[Conversation Start]' }],
-            });
-          }
+          const role: 'user' | 'assistant' =
+            turn.role === 'model' || turn.role === 'assistant' ? 'assistant' : 'user';
           if (
-            formattedContents.length > 0 &&
-            formattedContents[formattedContents.length - 1].role === role
+            conversationMessages.length > 0 &&
+            conversationMessages[conversationMessages.length - 1].role === role
           ) {
-            formattedContents[formattedContents.length - 1].parts[0].text += `\n${turn.text.trim()}`;
+            conversationMessages[conversationMessages.length - 1].content += `\n${turn.text.trim()}`;
           } else {
-            formattedContents.push({
+            conversationMessages.push({
               role,
-              parts: [{ text: turn.text.trim() }],
+              content: turn.text.trim(),
             });
           }
         }
@@ -616,17 +562,17 @@ async function startServer() {
 
     const cleanPromptText = String(prompt || '').trim() || '...';
     if (
-      formattedContents.length > 0 &&
-      formattedContents[formattedContents.length - 1].role === 'user'
+      conversationMessages.length > 0 &&
+      conversationMessages[conversationMessages.length - 1].role === 'user'
     ) {
-      const lastUserText = formattedContents[formattedContents.length - 1].parts[0].text;
+      const lastUserText = conversationMessages[conversationMessages.length - 1].content;
       if (lastUserText !== cleanPromptText && !lastUserText.endsWith(`\n${cleanPromptText}`)) {
-        formattedContents[formattedContents.length - 1].parts[0].text += `\n${cleanPromptText}`;
+        conversationMessages[conversationMessages.length - 1].content += `\n${cleanPromptText}`;
       }
     } else {
-      formattedContents.push({
+      conversationMessages.push({
         role: 'user',
-        parts: [{ text: cleanPromptText }],
+        content: cleanPromptText,
       });
     }
 
@@ -738,23 +684,17 @@ async function startServer() {
 
     const fullSystemInstruction = `${baseSystemStr}${extraScenarioSection}${extraExamplesSection}${memorySection}${regenerateDirective}${unconstrainedCaiDirective}`;
 
-    const generationConfig = {
-      systemInstruction: fullSystemInstruction,
-      temperature: isRegenerate ? 1.08 : 1.0,
-      topP: 0.95,
-    };
+    const openRouterMessages: OpenRouterMessage[] = [
+      {
+        role: 'system',
+        content: fullSystemInstruction,
+      },
+      ...conversationMessages,
+    ];
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    const isDailyQuotaExhaustedError = (err: any): boolean => {
-      const msg = String(err?.message || err || '');
-      return (
-        msg.includes('GenerateRequestsPerDayPerProjectPerModel') ||
-        msg.includes('requests per day limit exceeded')
-      );
-    };
     const isRetryableTransientError = (err: any): boolean => {
-      if (isDailyQuotaExhaustedError(err)) return false;
-      const msg = String(err?.message || err || '');
+      const msg = String(err?.message || err || '').toLowerCase();
       const status = Number(err?.status || 0);
       return (
         isQuotaError(err) ||
@@ -764,103 +704,60 @@ async function startServer() {
         status === 503 ||
         status === 504 ||
         msg.includes('503') ||
-        msg.includes('UNAVAILABLE') ||
-        msg.includes('MODEL_TIMEOUT') ||
+        msg.includes('unavailable') ||
+        msg.includes('model_timeout') ||
         msg.includes('overloaded') ||
-        msg.includes('high demand') ||
         msg.includes('fetch failed')
       );
     };
 
     let lastError: any = null;
     let nonAuthError: any = null;
-    const MAX_BACKOFF_PASSES = 3;
+    const MAX_BACKOFF_PASSES = 2;
 
     for (const activeKey of candidateKeys) {
-      const ai = createGenAiClient(activeKey);
       let keyInvalid = false;
-      const dailyExhaustedModels = new Set<string>();
 
       for (let pass = 0; pass < MAX_BACKOFF_PASSES; pass++) {
         if (pass > 0) {
-          // Exponential backoff with jitter between passes across candidate models
-          const passDelayMs = Math.min(4500, 650 * Math.pow(2, pass - 1) + Math.floor(Math.random() * 300));
+          const passDelayMs = Math.min(3500, 650 * Math.pow(2, pass - 1) + Math.floor(Math.random() * 250));
           await sleep(passDelayMs);
         }
 
         for (const modelName of CANDIDATE_MODELS) {
-          if (dailyExhaustedModels.has(modelName)) continue;
+          try {
+            const response = await withModelTimeout(
+              generateOpenRouterCompletion(activeKey, {
+                model: modelName,
+                messages: openRouterMessages,
+                temperature: isRegenerate ? 1.05 : 0.95,
+                topP: 0.95,
+              }),
+              20000
+            );
 
-          // Per-model retry with exponential backoff for transient 429/503 spikes
-          const maxModelAttempts = pass === 0 ? 2 : 1;
+            const rawText = response.text || '';
+            const formattedText = formatCharacterBubbles(rawText);
 
-          for (let attempt = 0; attempt < maxModelAttempts; attempt++) {
-            if (attempt > 0) {
-              const attemptDelayMs = 450 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
-              await sleep(attemptDelayMs);
+            if (formattedText) {
+              return res.json({
+                text: formattedText,
+                modelUsed: response.modelUsed || modelName,
+              });
             }
+          } catch (error: any) {
+            lastError = error;
 
-            try {
-              let response;
-              try {
-                response = await withModelTimeout(
-                  generateContentWithKey(activeKey, ai, {
-                    model: modelName,
-                    contents: formattedContents,
-                    config: generationConfig,
-                  }),
-                  10000
-                );
-              } catch (innerErr: any) {
-                const errMsg = String(innerErr?.message || '');
-                if (
-                  innerErr?.status === 400 &&
-                  !isInvalidKeyError(innerErr) &&
-                  !errMsg.includes('not found')
-                ) {
-                  response = await withModelTimeout(
-                    generateContentWithKey(activeKey, ai, {
-                      model: modelName,
-                      contents: formattedContents,
-                      config: { systemInstruction: fullSystemInstruction },
-                    }),
-                    10000
-                  );
-                } else {
-                  throw innerErr;
-                }
-              }
-
-              const rawText = response.text || '';
-              const formattedText = formatCharacterBubbles(rawText);
-
-              if (formattedText) {
-                return res.json({
-                  text: formattedText,
-                  modelUsed: modelName,
-                });
-              }
-            } catch (error: any) {
-              lastError = error;
-
-              if (isInvalidKeyError(error)) {
-                keyInvalid = true;
-                break;
-              } else {
-                nonAuthError = error;
-                if (isDailyQuotaExhaustedError(error)) {
-                  dailyExhaustedModels.add(modelName);
-                  break;
-                }
-                // Only retry the same model immediately if it's a transient rate-limit or 503 error
-                if (!isRetryableTransientError(error)) {
-                  break;
-                }
+            if (isInvalidKeyError(error)) {
+              keyInvalid = true;
+              break;
+            } else {
+              nonAuthError = error;
+              if (!isRetryableTransientError(error)) {
+                continue;
               }
             }
           }
-
-          if (keyInvalid) break;
         }
 
         if (keyInvalid) break;
@@ -872,26 +769,28 @@ async function startServer() {
     if (isInvalidKeyError(effectiveError)) {
       return res.status(401).json({
         error: 'INVALID_KEY',
-        message: 'Invalid Gemini API key. Open Settings > Intelligence to update or clear your custom API key.',
+        message:
+          'Invalid OpenRouter API key. Check process.env.OPENROUTER_API_KEY or update your custom key in Settings > Intelligence.',
         reason: 'INVALID_KEY',
-        details: String(effectiveError?.message || 'Invalid API key'),
+        details: String(effectiveError?.message || 'Invalid OpenRouter API key'),
       });
     }
 
     if (isQuotaError(effectiveError)) {
       return res.status(429).json({
         error: 'QUOTA_EXCEEDED',
-        message: 'Gemini API rate limit or quota reached across active models. Wait a moment and click Retry, or add a custom API key in Settings.',
+        message:
+          'OpenRouter API rate limit or quota reached for cognitivecomputations/dolphin-mistral-24b-venice-edition. Wait a moment and click Retry.',
         reason: 'QUOTA_EXCEEDED',
-        details: String(effectiveError?.message || 'Quota exceeded'),
+        details: String(effectiveError?.message || 'Rate limit exceeded'),
       });
     }
 
     return res.status(502).json({
       error: 'MODEL_ERROR',
-      message: 'Temporary connection issue with Gemini model endpoint. Click Retry to resend your message.',
+      message: `OpenRouter connection issue (${String(effectiveError?.message || 'Unable to reach OpenRouter API')}). Click Retry to resend.`,
       reason: 'MODEL_ERROR',
-      details: String(effectiveError?.message || 'Unable to reach Gemini API'),
+      details: String(effectiveError?.message || 'Unable to reach OpenRouter API'),
     });
   });
 

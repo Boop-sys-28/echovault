@@ -435,3 +435,71 @@ export function processArchitectCommand(
     updatedMap,
   };
 }
+
+export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+export const OPENROUTER_MODEL = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
+export const OPENROUTER_REFERER = 'https://echovault-or9c.onrender.com';
+export const OPENROUTER_TITLE = 'EchoVault';
+
+export interface OpenRouterChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Executes an OpenRouter chat completion request using
+ * https://openrouter.ai/api/v1/chat/completions and model
+ * cognitivecomputations/dolphin-mistral-24b-venice-edition.
+ */
+export async function requestOpenRouterCompletion(params: {
+  apiKey: string;
+  systemInstruction: string;
+  messages: OpenRouterChatMessage[];
+  temperature?: number;
+  topP?: number;
+  model?: string;
+}): Promise<{ text: string; modelUsed: string }> {
+  const activeModel = params.model || OPENROUTER_MODEL;
+  const fullMessages: OpenRouterChatMessage[] = [
+    ...(params.systemInstruction
+      ? [{ role: 'system' as const, content: params.systemInstruction }]
+      : []),
+    ...params.messages,
+  ];
+
+  const response = await fetch(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${params.apiKey.trim()}`,
+      'HTTP-Referer': OPENROUTER_REFERER,
+      'X-Title': OPENROUTER_TITLE,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: activeModel,
+      messages: fullMessages,
+      temperature: params.temperature ?? 0.95,
+      top_p: params.topP ?? 0.95,
+    }),
+  });
+
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errMsg =
+      data?.error?.message ||
+      data?.error ||
+      data?.message ||
+      `OpenRouter HTTP ${response.status}`;
+    const err: any = new Error(String(errMsg));
+    err.status = response.status;
+    throw err;
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  const text = typeof content === 'string' ? content.trim() : '';
+  return {
+    text,
+    modelUsed: data?.model || activeModel,
+  };
+}
+
