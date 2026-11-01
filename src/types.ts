@@ -17,6 +17,8 @@ export type Universe =
   | 'fantasy'
   | 'Motorsport'
   | 'motorsport'
+  | 'Cinema & Screen Icons'
+  | 'Cinema'
   | string;
 
 export interface UserProfile {
@@ -49,6 +51,16 @@ export interface PhotoPreset {
   caption: string;
 }
 
+export interface StoryItem {
+  charId: string;
+  storyImg: string;
+  storyText: string;
+  storyTime: string;
+  timestamp: number;
+  expiresAt: number;
+  rotationIndex: number;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -65,6 +77,8 @@ export interface Character {
   storyImg?: string;
   storyText?: string;
   storyTime?: string;
+  storyTimestamp?: number;
+  storyExpiresAt?: number;
   song: string;
   status: string;
   themeAccent?: string;
@@ -75,6 +89,7 @@ export interface Character {
   online?: boolean;
   relationshipLevel?: number;
   affinity?: number;
+  bondScore?: number;
   affection?: number;
   trustScore?: number;
   bond?: number;
@@ -99,6 +114,8 @@ export interface Message {
   replyTo?: ReplyReference;
   variants?: string[];
   activeVariantIndex?: number;
+  variations?: string[];
+  activeVariationIndex?: number;
 }
 
 export interface CallState {
@@ -191,8 +208,9 @@ export interface DynamicGroupRoom {
 }
 
 export interface RelationshipScoreBreakdown {
-  affinity: number;          // Current affinity score (-100 to +100)
-  tier: 'Enemy' | 'Stranger' | 'Acquaintance' | 'Trusted' | 'Close' | 'Devoted';
+  affinity: number;          // Current affinity / bond score (-100 to +100)
+  bondScore?: number;        // Explicit bondScore mirror
+  tier: 'Enemy' | 'Stranger' | 'Acquaintance' | 'Trusted' | 'Close' | 'Partner / Devoted' | 'Devoted';
   positiveTriggersCount: number;
   negativeTriggersCount: number;
   importedHistorySummary?: string;

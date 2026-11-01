@@ -34,6 +34,7 @@ import {
   DynamicGroupRoom,
   BacklogMessage,
   RelationshipScoreBreakdown,
+  StoryItem,
 } from './types';
 import {
   loadSavedThemeConfig,
@@ -73,7 +74,20 @@ import {
   computeAffinityDeltaFromTranscript,
   getRelationshipTierFromAffinity,
   evaluateTurnAffinityChange,
+  buildBondToneInstruction,
 } from './utils/caiImporter';
+import {
+  loadChatsFromIndexedDB,
+  saveChatsToIndexedDB,
+  peekLegacyLocalStorageChats,
+  loadGroupRoomMessagesFromIndexedDB,
+  saveGroupRoomMessagesToIndexedDB,
+  clearAllChatsInIndexedDB,
+} from './utils/idbStorage';
+import {
+  refreshAndRotateStories,
+  rotateCharacterStoryNow,
+} from './utils/storiesManager';
 
 // Strict 3 to 4 hour cooldown window for automatic away check-ins (in milliseconds)
 const MIN_AWAY_COOLDOWN_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -251,6 +265,7 @@ export default function App() {
   });
   const [activeGroupRoomId, setActiveGroupRoomId] = useState<string>('');
   const [groupRoomMessages, setGroupRoomMessages] = useState<Record<string, BacklogMessage[]>>({});
+  const [groupTypingSenderName, setGroupTypingSenderName] = useState<string | null>(null);
 
   // Characters list (including custom imported characters from C.AI and persisted operative_user_counts)
   const [characters, setCharacters] = useState<Character[]>(() => {
@@ -365,16 +380,52 @@ export default function App() {
   // Active Open Character: Empty by default until user searches or selects one
   const [activeCharId, setActiveCharId] = useState<string>('');
 
-  // Messages state: Empty by default for new users
-  const [chats, setChats] = useState<Record<string, Message[]>>(() => {
-    try {
-      const saved = localStorage.getItem('pulsedirect_chats');
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // fallback
-    }
-    return {};
-  });
+  // Messages state: Empty by default for new users; peeks any unmigrated legacy localStorage chats synchronously and then hydrates from IndexedDB
+  const [chats, setChats] = useState<Record<string, Message[]>>(() =>
+    peekLegacyLocalStorageChats()
+  );
+  const [idbHydrated, setIdbHydrated] = useState<boolean>(false);
+
+  // One-time automatic migration from localStorage -> IndexedDB and initial IndexedDB hydration
+  useEffect(() => {
+    let cancelled = false;
+    loadChatsFromIndexedDB()
+      .then((loadedChats) => {
+        if (cancelled) return;
+        if (loadedChats && Object.keys(loadedChats).length > 0) {
+          setChats((prev) => {
+            const merged: Record<string, Message[]> = { ...loadedChats };
+            for (const [charId, currList] of Object.entries(prev)) {
+              if (!Array.isArray(currList) || currList.length === 0) continue;
+              const existing = merged[charId] || [];
+              if (existing.length === 0) {
+                merged[charId] = currList;
+              } else {
+                const seen = new Set(existing.map((m) => m.id));
+                const combined = [...existing];
+                for (const m of currList) {
+                  if (m && m.id && !seen.has(m.id)) {
+                    seen.add(m.id);
+                    combined.push(m);
+                  }
+                }
+                combined.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+                merged[charId] = combined;
+              }
+            }
+            return merged;
+          });
+        }
+        setIdbHydrated(true);
+      })
+      .catch(() => {
+        if (!cancelled) setIdbHydrated(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Ephemeral Burner Mode
   const [defaultBurnerOnStartup, setDefaultBurnerOnStartup] = useState<boolean>(() => {
@@ -455,6 +506,79 @@ export default function App() {
     }
     return [];
   });
+
+  // 24-Hour Expiring Stories State (tracks timestamp & expiresAt, auto-rotates expired stories on mount)
+  const [activeStoriesMap, setActiveStoriesMap] = useState<Record<string, StoryItem>>(() => {
+    const { storiesMap } = refreshAndRotateStories(DEFAULT_CHARACTERS);
+    return storiesMap;
+  });
+
+  // Automated routine on app mount (and periodic check) that filters out any story older than 24 hours
+  // and rotates expired stories to their next canon status update/photo snippet for the day
+  useEffect(() => {
+    const runStoryExpirationSweep = () => {
+      const { storiesMap, rotatedCharIds } = refreshAndRotateStories(characters);
+      setActiveStoriesMap(storiesMap);
+
+      // Sync active 24h story fields onto character objects so any viewer modal reflects the rotated snippet
+      setCharacters(prev =>
+        prev.map(c => {
+          const item = storiesMap[c.id];
+          if (!item) return c;
+          return {
+            ...c,
+            storyImg: item.storyImg,
+            storyText: item.storyText,
+            storyTime: item.storyTime,
+            storyTimestamp: item.timestamp,
+            storyExpiresAt: item.expiresAt,
+          };
+        })
+      );
+
+      // If any character's story rotated to a fresh daily update, clear their viewed flag so the neon ring pulses
+      if (rotatedCharIds.length > 0) {
+        setViewedStoryIds(prev => {
+          const rotatedSet = new Set(rotatedCharIds);
+          const filtered = prev.filter(id => !rotatedSet.has(id));
+          try {
+            localStorage.setItem('pulsedirect_viewed_stories', JSON.stringify(filtered));
+          } catch {
+            // ignore
+          }
+          return filtered;
+        });
+      }
+    };
+
+    runStoryExpirationSweep();
+    const interval = setInterval(runStoryExpirationSweep, 60000);
+    return () => clearInterval(interval);
+  }, [characters.length]);
+
+  const handleRotateCharacterStory = (charId: string) => {
+    const targetChar = characters.find(c => c.id === charId);
+    if (!targetChar) return;
+    const rotatedItem = rotateCharacterStoryNow(targetChar, activeStoriesMap);
+    setActiveStoriesMap(prev => ({
+      ...prev,
+      [charId]: rotatedItem,
+    }));
+    setCharacters(prev =>
+      prev.map(c =>
+        c.id === charId
+          ? {
+              ...c,
+              storyImg: rotatedItem.storyImg,
+              storyText: rotatedItem.storyText,
+              storyTime: rotatedItem.storyTime,
+              storyTimestamp: rotatedItem.timestamp,
+              storyExpiresAt: rotatedItem.expiresAt,
+            }
+          : c
+      )
+    );
+  };
 
   // Character Memories State (initialized from localStorage across all characters)
   const [charMemories, setCharMemories] = useState<Record<string, string[]>>(() => {
@@ -557,6 +681,7 @@ export default function App() {
     setRelationshipLevels(nextAffinityMap);
     try {
       localStorage.setItem('pulsedirect_relationship_levels', JSON.stringify(nextAffinityMap));
+      localStorage.setItem('pulsedirect_bond_scores', JSON.stringify(nextAffinityMap));
     } catch {
       // ignore
     }
@@ -564,12 +689,14 @@ export default function App() {
     setScoreBreakdowns(prev => {
       const existing = prev[charId] || {
         affinity: 0,
+        bondScore: 0,
         tier: 'Stranger',
         positiveTriggersCount: 0,
         negativeTriggersCount: 0,
       };
       const updated: RelationshipScoreBreakdown = {
         affinity: nextAffinity,
+        bondScore: nextAffinity,
         tier: nextTier,
         positiveTriggersCount: existing.positiveTriggersCount + (options?.posHits ?? (delta > 0 ? 1 : 0)),
         negativeTriggersCount: existing.negativeTriggersCount + (options?.negHits ?? (delta < 0 ? 1 : 0)),
@@ -604,18 +731,14 @@ export default function App() {
       // ignore
     }
 
-    // Sync any newly unlocked room's persisted backlog into state
+    // Sync any newly unlocked room's persisted backlog from IndexedDB into state
     evaluatedRooms.forEach(room => {
       if (room.isUnlocked) {
-        try {
-          const raw = localStorage.getItem(`pulsedirect_messages_${room.id}`);
-          if (raw) {
-            const parsed: BacklogMessage[] = JSON.parse(raw);
+        loadGroupRoomMessagesFromIndexedDB(room.id).then(parsed => {
+          if (parsed && parsed.length > 0) {
             setGroupRoomMessages(prev => ({ ...prev, [room.id]: parsed }));
           }
-        } catch {
-          // ignore
-        }
+        });
       }
     });
   };
@@ -753,17 +876,17 @@ export default function App() {
     })
   );
 
-  // Persist user & chats when not in burner mode
+  // Persist chat logs exclusively to IndexedDB (and lightweight active_convos index to localStorage) when not in burner mode
   useEffect(() => {
-    if (!burnerMode && currentUser) {
+    if (!burnerMode && currentUser && idbHydrated) {
+      saveChatsToIndexedDB(chats);
       try {
-        localStorage.setItem('pulsedirect_chats', JSON.stringify(chats));
         localStorage.setItem('pulsedirect_active_convos', JSON.stringify(activeConversationIds));
       } catch {
         // storage quota exceeded or disabled
       }
     }
-  }, [chats, activeConversationIds, burnerMode, currentUser]);
+  }, [chats, activeConversationIds, burnerMode, currentUser, idbHydrated]);
 
   // Sync Clock (12-hour format)
   useEffect(() => {
@@ -884,6 +1007,7 @@ export default function App() {
     localStorage.removeItem('pulsedirect_current_user');
     localStorage.removeItem('pulsedirect_chats');
     localStorage.removeItem('pulsedirect_active_convos');
+    clearAllChatsInIndexedDB();
     setCurrentUser(null);
     setChats({});
     setActiveConversationIds([]);
@@ -897,6 +1021,7 @@ export default function App() {
     } catch {
       // ignore
     }
+    clearAllChatsInIndexedDB();
     setIsSettingsModalOpen(false);
     setCurrentUser(null);
     setChats({});
@@ -945,6 +1070,8 @@ export default function App() {
             text: bubbleText,
             variants: [bubbleText],
             activeVariantIndex: 0,
+            variations: [bubbleText],
+            activeVariationIndex: 0,
             image: index === 0 ? options?.photoUrl : undefined,
             timestamp: bubbleTimestampMs,
             replyTo: index === 0 ? options?.replyTo : undefined,
@@ -981,7 +1108,7 @@ export default function App() {
   /**
    * Builds the full character system instruction combining `system`, `systemInstruction`,
    * Character.ai `scenario` & `mesExamples` (with {{char}} and {{user}} variable replacement),
-   * live relationship score/tier context, Response Director overrides, AND all extracted
+   * live relationship bondScore/tier context, Response Director overrides, AND all extracted
    * episodic memories from MemoryVaultModal / localStorage for the character.
    */
   const buildFullCharacterSystemPrompt = (char: Character, explicitMemories?: string[]): string => {
@@ -1000,9 +1127,11 @@ export default function App() {
     const caiDefinitionBlock = buildCharacterCaiDefinitionBlock(char, userName);
     const currentAffinity = relationshipLevels[char.id] ?? 0;
     const currentTier = getRelationshipTierFromAffinity(currentAffinity);
-    const dynamicRelationshipBlock = `\n\n[CURRENT RELATIONSHIP & AFFINITY STATE]:
-- Current Affinity Score: ${currentAffinity} / 100 (Tier: ${currentTier}).
-- Baseline started at 0 (Stranger). Respond authentically according to this ${currentTier} relationship tier and your canon personality.`;
+    const bondToneGuidance = buildBondToneInstruction(currentAffinity, char.name);
+    const dynamicRelationshipBlock = `\n\n[CURRENT RELATIONSHIP & BOND PROGRESSION]:
+- Current Bond Score: ${currentAffinity} / 100 (Status Tier: ${currentTier}).
+- ${bondToneGuidance}
+- Baseline started at 0 (Stranger). Let this ${currentTier} bond tier subtly shape your warmth, banter, and emotional openness while staying 100% true to your canon personality.`;
     const directiveBlock = buildDirectivePromptBlock(char.id, char.name, userName);
     const memoryVaultBlock = buildMemoryPromptBlock(
       char.id,
@@ -1258,6 +1387,8 @@ export default function App() {
             text: selectedChar.greeting,
             variants: [selectedChar.greeting],
             activeVariantIndex: 0,
+            variations: [selectedChar.greeting],
+            activeVariationIndex: 0,
             timestamp: Date.now(),
           },
         ]
@@ -1280,20 +1411,16 @@ export default function App() {
     if (!room || !room.isUnlocked) return;
     setActiveGroupRoomId(roomId);
     if (!groupRoomMessages[roomId]) {
-      try {
-        const saved = localStorage.getItem(`pulsedirect_messages_${roomId}`);
-        if (saved) {
-          setGroupRoomMessages(prev => ({ ...prev, [roomId]: JSON.parse(saved) }));
-          return;
-        }
-      } catch {
-        // fallback
-      }
       setGroupRoomMessages(prev => ({ ...prev, [roomId]: room.baseBacklog }));
+      loadGroupRoomMessagesFromIndexedDB(roomId).then(saved => {
+        if (saved && saved.length > 0) {
+          setGroupRoomMessages(prev => ({ ...prev, [roomId]: saved }));
+        }
+      });
     }
   };
 
-  // Sending a Message in an Unlocked Dynamic Group Room
+  // Sending a Message in an Unlocked Dynamic Group Room (with Group Banter Interjections in I.M.P. Comms)
   const handleSendGroupMessage = async (text: string) => {
     if (!text.trim() || !activeGroupRoom) return;
     playMessageSentSound();
@@ -1311,27 +1438,181 @@ export default function App() {
       ...prev,
       [activeGroupRoom.id]: currentRoomHistory,
     }));
-    try {
-      localStorage.setItem(`pulsedirect_messages_${activeGroupRoom.id}`, JSON.stringify(currentRoomHistory));
-    } catch {
-      // ignore
-    }
+    saveGroupRoomMessagesToIndexedDB(activeGroupRoom.id, currentRoomHistory);
 
     setInputText('');
-    setIsTyping(true);
 
-    // Choose a member from the group room to respond
+    // Choose a primary member from the group room to respond
+    const lowerText = text.toLowerCase();
     const responderId =
-      activeGroupRoom.memberIds.find(mid => text.toLowerCase().includes(mid)) ||
+      activeGroupRoom.memberIds.find(mid => {
+        const ch = characters.find(c => c.id === mid);
+        return (
+          lowerText.includes(mid) ||
+          (ch && lowerText.includes(ch.name.toLowerCase().split(' ')[0].replace(/ø/g, 'o')))
+        );
+      }) ||
       activeGroupRoom.unlockedBy ||
       activeGroupRoom.memberIds[Math.floor(Math.random() * activeGroupRoom.memberIds.length)];
+
     const responderChar = characters.find(c => c.id === responderId);
     if (!responderChar) {
       setIsTyping(false);
+      setGroupTypingSenderName(null);
       return;
     }
 
+    setGroupTypingSenderName(responderChar.name);
+    setIsTyping(true);
+
+    // Increment bond score slightly with the responding group member
+    applyCharacterAffinityUpdate(responderChar.id, 2, { posHits: 1, negHits: 0 });
+
+    const roomId = activeGroupRoom.id;
+    const sequenceId = ++typingSequenceCancelRef.current;
     const requestStart = Date.now();
+
+    /**
+     * Triggers a spontaneous secondary banter interjection from Blitzø, Moxxie, Millie, or Loona
+     * in I.M.P. Emergency Comms (or another member in unlocked group channels) reacting to what was just said.
+     */
+    const maybeTriggerGroupBanterInterjection = async (
+      primaryChar: Character,
+      primaryReplyText: string
+    ) => {
+      if (typingSequenceCancelRef.current !== sequenceId) return;
+
+      // In I.M.P. Emergency Comms, prioritize Blitzø, Moxxie, or Millie (or Loona) for chaotic office banter
+      const isImpRoom = roomId === 'imp_comms';
+      const shouldInterject = isImpRoom ? Math.random() < 0.85 : Math.random() < 0.55;
+      if (!shouldInterject) {
+        setGroupTypingSenderName(null);
+        return;
+      }
+
+      const impBanterCandidates = isImpRoom
+        ? ['blitzo', 'moxxie', 'millie', 'loona'].filter(id => id !== primaryChar.id)
+        : activeGroupRoom.memberIds.filter(id => id !== primaryChar.id);
+
+      if (impBanterCandidates.length === 0) {
+        setGroupTypingSenderName(null);
+        return;
+      }
+
+      const interjectorId =
+        impBanterCandidates[Math.floor(Math.random() * impBanterCandidates.length)];
+      const interjectorChar = characters.find(c => c.id === interjectorId);
+      if (!interjectorChar) {
+        setGroupTypingSenderName(null);
+        return;
+      }
+
+      // Brief pause before secondary character starts typing their interjection
+      await new Promise(r => setTimeout(r, 950));
+      if (typingSequenceCancelRef.current !== sequenceId) return;
+
+      setGroupTypingSenderName(interjectorChar.name);
+      setIsTyping(true);
+
+      const userName = currentUser?.codename || currentUser?.username || 'Operative_07';
+      const customStoredKey = getExplicitCustomApiKey();
+      const interjectorMemories = getMergedCharacterMemories(
+        interjectorChar.id,
+        charMemories[interjectorChar.id]
+      );
+      const defFields = getCharacterDefinitionFields(interjectorChar, userName);
+
+      // Canon fallback interjections in case API quota is temporarily exhausted
+      const canonImpInterjections: Record<string, string[]> = {
+        blitzo: [
+          `OH SHUT UP ${primaryChar.name.toUpperCase()}!! Nobody asked for a lecture on company policy while I'm cleaning my flintlock!! 🐴🔫`,
+          `WAIT A SECOND—are we talking about a new hit or is Moxxie crying about the budget again?! Because I'm in!! 🔥`,
+          `Damn right!! That's why I run this circus—keep that energy up and maybe I won't dock everyone's pay!! 🏆`,
+        ],
+        moxxie: [
+          `Sir, please! And ${primaryChar.name}, could we FOR ONCE keep this emergency tactical frequency strictly professional?! 📋💢`,
+          `*adjusts bowtie exasperatedly* I swear, nobody in this office reads the operational safety memos I laminated...`,
+          `Actually, I have to agree with ${userName} on that point—assuming nobody sets the company van on fire again.`,
+        ],
+        millie: [
+          `Hahaha!! Oh c'mon ${primaryChar.name}, don't be so dramatic! Let's go grab snacks after this contract! ❤️🪓`,
+          `Ooooh I like the sound of that!! Moxxie, honey, grab the extra battle axes—this is gonna be fun!! 🔥🤠`,
+          `*giggles* Y'all are wild on comms today, I love this crew so much!! ❤️`,
+        ],
+        loona: [
+          `*groans loudly* can you guys NOT blow up my phone while i'm trying to scroll sinsta at the reception desk?! 🎧🙄`,
+          `lol ${primaryChar.name} really thought they ate with that one. whatever, just don't make me file paperwork.`,
+        ],
+      };
+
+      let interjectionText = '';
+      try {
+        const { ok, data } = await postChatWithBackoff(
+          {
+            prompt: `[GROUP BANTER INTERJECTION IN "${activeGroupRoom.name}"]: ${userName} said: "${text.trim()}", and ${primaryChar.name} just replied: "${primaryReplyText}". Chime in unprompted as ${interjectorChar.name} with a short, witty 1-bubble canon reaction or chaotic office banter directly responding to them! Do NOT use '||'.`,
+            systemInstruction: buildFullCharacterSystemPrompt(interjectorChar, interjectorMemories),
+            charName: interjectorChar.name,
+            userName,
+            scenario: defFields.resolvedScenario,
+            mesExamples: defFields.resolvedMesExamples,
+            memories: interjectorMemories.slice(0, 50),
+            history: [
+              { role: 'user', text: `${userName}: ${text.trim()}` },
+              { role: 'model', text: `${primaryChar.name}: ${primaryReplyText}` },
+            ],
+          },
+          customStoredKey,
+          1
+        );
+
+        if (ok && data?.text && String(data.text).trim()) {
+          interjectionText = String(data.text).split('||')[0].trim();
+        }
+      } catch {
+        // fallback below
+      }
+
+      if (!interjectionText) {
+        const pool = canonImpInterjections[interjectorChar.id] || [
+          `*chimes in on comms* Classic ${primaryChar.name}. Keep the line clear, team.`,
+        ];
+        interjectionText = pool[Math.floor(Math.random() * pool.length)];
+      }
+
+      if (typingSequenceCancelRef.current !== sequenceId) return;
+
+      orchestrateSequentialBubbles(
+        interjectorChar.id,
+        interjectionText,
+        {
+          shouldCancel: () => typingSequenceCancelRef.current !== sequenceId,
+          onTypingChange: (typing) => {
+            setIsTyping(typing);
+            if (!typing) setGroupTypingSenderName(null);
+          },
+          onDeliverBubble: (bubbleText, idx, bubbleTs) => {
+            playMessageReceivedSound();
+            const banterMsg: BacklogMessage = {
+              id: `${roomId}-banter-${bubbleTs}-${idx}`,
+              senderId: interjectorChar.id,
+              senderName: interjectorChar.name,
+              avatarUrl: interjectorChar.avatarUrl || interjectorChar.avatar,
+              text: bubbleText,
+              timestamp: formatBubbleTimestamp(bubbleTs),
+            };
+            setGroupRoomMessages(prev => {
+              const updatedList = [...(prev[roomId] || currentRoomHistory), banterMsg];
+              saveGroupRoomMessagesToIndexedDB(roomId, updatedList);
+              return {
+                ...prev,
+                [roomId]: updatedList,
+              };
+            });
+          },
+        }
+      );
+    };
+
     try {
       const customStoredKey = getExplicitCustomApiKey();
       const responderMemories = getMergedCharacterMemories(
@@ -1361,16 +1642,21 @@ export default function App() {
       );
 
       if (ok && data.text) {
-        const roomId = activeGroupRoom.id;
-        const sequenceId = ++typingSequenceCancelRef.current;
+        const primaryReplyRaw = String(data.text);
         const elapsedMs = Date.now() - requestStart;
 
         orchestrateSequentialBubbles(
           responderChar.id,
-          String(data.text),
+          primaryReplyRaw,
           {
             shouldCancel: () => typingSequenceCancelRef.current !== sequenceId,
-            onTypingChange: (typing) => setIsTyping(typing),
+            onTypingChange: (typing) => {
+              setIsTyping(typing);
+              if (!typing) {
+                setGroupTypingSenderName(null);
+                maybeTriggerGroupBanterInterjection(responderChar, primaryReplyRaw);
+              }
+            },
             onDeliverBubble: (bubbleText, idx, bubbleTs) => {
               playMessageReceivedSound();
               const botMsg: BacklogMessage = {
@@ -1383,11 +1669,7 @@ export default function App() {
               };
               setGroupRoomMessages(prev => {
                 const updatedList = [...(prev[roomId] || currentRoomHistory), botMsg];
-                try {
-                  localStorage.setItem(`pulsedirect_messages_${roomId}`, JSON.stringify(updatedList));
-                } catch {
-                  // ignore
-                }
+                saveGroupRoomMessagesToIndexedDB(roomId, updatedList);
                 return {
                   ...prev,
                   [roomId]: updatedList,
@@ -1399,9 +1681,11 @@ export default function App() {
         );
       } else {
         setIsTyping(false);
+        setGroupTypingSenderName(null);
       }
     } catch {
       setIsTyping(false);
+      setGroupTypingSenderName(null);
     }
   };
 
@@ -1876,6 +2160,7 @@ export default function App() {
     } catch {
       // ignore
     }
+    clearAllChatsInIndexedDB();
     setChats({});
     setBurnerChats({});
     setUnreadCounts({});
@@ -1912,7 +2197,175 @@ export default function App() {
     }
   };
 
-  // Swipe between existing character message variants (< 1/2 >)
+  // Rewind conversation to a selected message pivot point
+  const handleRewindToMessage = async (
+    charId: string,
+    msgId: string,
+    mode: 'regenerate' | 'edit' = 'regenerate'
+  ) => {
+    const char = characters.find(c => c.id === charId);
+    if (!char) return;
+
+    // 1. Immediately cancel any pending sequential typing bubbles or active indicators
+    typingSequenceCancelRef.current += 1;
+    setIsTyping(false);
+    setRegeneratingMsgId(null);
+    setApiErrorBanner(null);
+
+    const currentList = (burnerMode ? burnerChats[charId] : chats[charId]) || [];
+    const targetIdx = currentList.findIndex(
+      m => m.id === msgId || msgId.startsWith(`${m.id}-part-`)
+    );
+    if (targetIdx === -1) return;
+
+    const targetMsg = currentList[targetIdx];
+
+    // Option A ('edit'): Slice right before the selected user message and restore its text to the input box
+    if (mode === 'edit' && targetMsg.sender === 'user') {
+      const truncatedBefore = currentList.slice(0, targetIdx);
+      setInputText(targetMsg.text || '');
+      setReplyingTo(targetMsg.replyTo || null);
+
+      if (burnerMode) {
+        setBurnerChats(prev => ({
+          ...prev,
+          [charId]: truncatedBefore,
+        }));
+      } else {
+        setChats(prev => {
+          const next = {
+            ...prev,
+            [charId]: truncatedBefore,
+          };
+          saveChatsToIndexedDB(next);
+          return next;
+        });
+      }
+      return;
+    }
+
+    // Option B ('regenerate' - default): Slice up to and including the selected message
+    const truncatedInclusive = currentList.slice(0, targetIdx + 1);
+    setReplyingTo(null);
+
+    if (burnerMode) {
+      setBurnerChats(prev => ({
+        ...prev,
+        [charId]: truncatedInclusive,
+      }));
+    } else {
+      setChats(prev => {
+        const next = {
+          ...prev,
+          [charId]: truncatedInclusive,
+        };
+        saveChatsToIndexedDB(next);
+        return next;
+      });
+    }
+
+    // If the rewind target is a user message, automatically trigger a clean re-generation of the AI character's response from that exact pivot point
+    if (targetMsg.sender === 'user') {
+      if (char.id === 'architect') {
+        const cmdResult = processArchitectCommand(targetMsg.text, characters);
+        deliverCharacterBubblesSequentially(char, cmdResult.reply);
+        return;
+      }
+
+      setIsTyping(true);
+      const requestStart = Date.now();
+      const historyBeforePivot = truncatedInclusive.slice(0, -1);
+
+      try {
+        let promptPayload = (targetMsg.text || '').trim();
+        if (targetMsg.image) {
+          promptPayload = `[USER SENT YOU A PICTURE]: "${promptPayload || 'Look at this photo I took!'}"`;
+        } else if (targetMsg.replyTo) {
+          promptPayload = `[Replying directly to "${targetMsg.replyTo.text}" from ${targetMsg.replyTo.senderName}]: ${promptPayload}`;
+        }
+
+        const customStoredKey = getExplicitCustomApiKey();
+        const activeMemories = getMergedCharacterMemories(char.id, charMemories[char.id]);
+        const systemInstructionWithMemories = buildFullCharacterSystemPrompt(char, activeMemories);
+        const userName = currentUser?.codename || currentUser?.username || 'You';
+        const defFields = getCharacterDefinitionFields(char, userName);
+
+        const { ok, data } = await postChatWithBackoff(
+          {
+            prompt: promptPayload,
+            systemInstruction: systemInstructionWithMemories,
+            charName: char.name,
+            userName,
+            scenario: defFields.resolvedScenario,
+            mesExamples: defFields.resolvedMesExamples,
+            memories: activeMemories.slice(0, 75),
+            history: historyBeforePivot.slice(-50).map(m => ({
+              role: m.sender === 'user' ? 'user' : 'model',
+              text: m.text,
+            })),
+          },
+          customStoredKey
+        );
+
+        if (ok && data.text && String(data.text).trim()) {
+          let replyText = String(data.text).trim();
+          setApiErrorBanner(null);
+          setLastFailedMessageText(null);
+          if (!hasServerAi) setHasServerAi(true);
+
+          let photoUrl: string | undefined;
+          if (replyText.includes('[PHOTO_DROP:loona_bed]')) {
+            photoUrl = '/avatars/loona.png';
+            replyText = replyText.replace('[PHOTO_DROP:loona_bed]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:leon_desk]')) {
+            photoUrl = '/avatars/leon.png';
+            replyText = replyText.replace('[PHOTO_DROP:leon_desk]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:stolas_locket]')) {
+            photoUrl = '/avatars/stolas.png';
+            replyText = replyText.replace('[PHOTO_DROP:stolas_locket]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:gojo_shinjuku]')) {
+            photoUrl = '/avatars/gojo.png';
+            replyText = replyText.replace('[PHOTO_DROP:gojo_shinjuku]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:lucy_balcony]')) {
+            photoUrl = '/avatars/lucy.png';
+            replyText = replyText.replace('[PHOTO_DROP:lucy_balcony]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:marin_cosplay]')) {
+            photoUrl = '/avatars/marin.png';
+            replyText = replyText.replace('[PHOTO_DROP:marin_cosplay]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:frieren_lake]')) {
+            photoUrl = '/avatars/frieren.png';
+            replyText = replyText.replace('[PHOTO_DROP:frieren_lake]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:levi_tea]')) {
+            photoUrl = '/avatars/levi.png';
+            replyText = replyText.replace('[PHOTO_DROP:levi_tea]', '').trim();
+          } else if (replyText.includes('[PHOTO_DROP:makima_office]')) {
+            photoUrl = '/avatars/makima.png';
+            replyText = replyText.replace('[PHOTO_DROP:makima_office]', '').trim();
+          }
+
+          const elapsedMs = Date.now() - requestStart;
+          deliverCharacterBubblesSequentially(char, replyText, {
+            photoUrl,
+            alreadyWaitedMs: elapsedMs,
+          });
+        } else {
+          setIsTyping(false);
+          setLastFailedMessageText((targetMsg.text || '').trim());
+          setApiErrorBanner(
+            data?.message ||
+              data?.error ||
+              '⚠️ Model connection error while regenerating after rewind. Click Retry to resend.'
+          );
+        }
+      } catch {
+        setIsTyping(false);
+        setLastFailedMessageText((targetMsg.text || '').trim());
+        setApiErrorBanner('⚠️ Network / model connection error while regenerating after rewind.');
+      }
+    }
+  };
+
+  // Swipe between existing character message variations (< 1/2 > or < 2/3 >)
   const handleSwipeMessageVariant = (
     charId: string,
     msgId: string,
@@ -1921,20 +2374,30 @@ export default function App() {
     const updateList = (list: Message[]) =>
       list.map(m => {
         if (m.id !== msgId) return m;
-        const variants = m.variants && m.variants.length > 0 ? m.variants : [m.text];
-        const currentIdx =
-          typeof m.activeVariantIndex === 'number'
-            ? Math.min(Math.max(0, m.activeVariantIndex), variants.length - 1)
+        const variations =
+          m.variations && m.variations.length > 0
+            ? m.variations
+            : m.variants && m.variants.length > 0
+            ? m.variants
+            : [m.text];
+        const rawIdx =
+          typeof m.activeVariationIndex === 'number'
+            ? m.activeVariationIndex
+            : typeof m.activeVariantIndex === 'number'
+            ? m.activeVariantIndex
             : 0;
+        const currentIdx = Math.min(Math.max(0, rawIdx), variations.length - 1);
         const nextIdx =
           direction === 'prev'
             ? Math.max(0, currentIdx - 1)
-            : Math.min(variants.length - 1, currentIdx + 1);
+            : Math.min(variations.length - 1, currentIdx + 1);
         return {
           ...m,
-          variants,
+          variants: variations,
           activeVariantIndex: nextIdx,
-          text: variants[nextIdx] ?? m.text,
+          variations,
+          activeVariationIndex: nextIdx,
+          text: variations[nextIdx] ?? m.text,
         };
       });
 
@@ -1951,7 +2414,7 @@ export default function App() {
     }
   };
 
-  // Generate a new alternate reply variant for a character message and swipe to it (< 2/2 >)
+  // Generate a new alternate reply variation branch for a character message and swipe to it (< 2/2 > or < 2/3 >)
   const handleRegenerateMessageVariant = async (charId: string, msgId: string) => {
     if (regeneratingMsgId) return;
     const char = characters.find(c => c.id === charId);
@@ -1963,7 +2426,9 @@ export default function App() {
 
     const targetMsg = currentList[targetIdx];
     const existingVariants =
-      targetMsg.variants && targetMsg.variants.length > 0
+      targetMsg.variations && targetMsg.variations.length > 0
+        ? targetMsg.variations
+        : targetMsg.variants && targetMsg.variants.length > 0
         ? targetMsg.variants
         : [targetMsg.text];
 
@@ -2015,7 +2480,6 @@ export default function App() {
         let newVariantText = String(data.text).trim();
         // Clean any photo drop tag if present
         newVariantText = newVariantText.replace(/\[PHOTO_DROP:[^\]]+\]/g, '').trim();
-        // If multi-bubble delimiter '||' was returned, normalize spacing so it renders cleanly
         const nextVariants = [...existingVariants, newVariantText];
         const nextIdx = nextVariants.length - 1;
 
@@ -2028,6 +2492,8 @@ export default function App() {
                   ...m,
                   variants: nextVariants,
                   activeVariantIndex: nextIdx,
+                  variations: nextVariants,
+                  activeVariationIndex: nextIdx,
                   text: newVariantText,
                   timestamp: Date.now(),
                 }
@@ -2047,11 +2513,11 @@ export default function App() {
         }
       } else {
         setApiErrorBanner(
-          data?.message || data?.error || '⚠️ Failed to generate new reply variant. Please retry.'
+          data?.message || data?.error || '⚠️ Failed to generate new reply variation. Please retry.'
         );
       }
     } catch {
-      setApiErrorBanner('⚠️ Network error while generating reply variant.');
+      setApiErrorBanner('⚠️ Network error while generating reply variation.');
     } finally {
       setRegeneratingMsgId(null);
     }
@@ -2128,12 +2594,14 @@ export default function App() {
         }}
       />
 
-      {/* 4. Sinsta Story Viewer Modal (Unlocked Stories) */}
+      {/* 4. Sinsta Story Viewer Modal (Unlocked 24h Stories) */}
       <StoryViewerModal
         isOpen={!!storyCharId}
         character={characters.find(c => c.id === storyCharId) || null}
+        storyItem={storyCharId ? activeStoriesMap[storyCharId] || null : null}
         onClose={() => setStoryCharId(null)}
         onMarkViewed={handleMarkStoryViewed}
+        onRotateStory={handleRotateCharacterStory}
         onReply={(text) => {
           if (storyCharId) {
             handleSelectCharacter(storyCharId);
@@ -2304,6 +2772,7 @@ export default function App() {
         userProfile={currentUser}
         followedCharIds={followedCharIds}
         viewedStoryIds={viewedStoryIds}
+        activeStoriesMap={activeStoriesMap}
         onLogout={handleLogout}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -2343,6 +2812,7 @@ export default function App() {
         character={activeChar}
         activeGroupRoom={activeGroupRoom}
         groupMessages={activeGroupRoom ? groupRoomMessages[activeGroupRoom.id] || activeGroupRoom.baseBacklog : []}
+        groupTypingSenderName={groupTypingSenderName}
         onSendGroupMessage={handleSendGroupMessage}
         scoreBreakdown={activeCharScoreData}
         onOpenScoreModal={() => setIsScoreModalOpen(true)}
@@ -2372,6 +2842,9 @@ export default function App() {
         onClearChat={() => activeChar && handleClearActiveChatMessages(activeChar.id)}
         onDeleteChat={() => activeChar && handleDeleteChat(activeChar.id)}
         onDeleteMessage={(msgId) => activeChar && handleDeleteMessage(activeChar.id, msgId)}
+        onRewindToMessage={(msgId, mode) =>
+          activeChar && handleRewindToMessage(activeChar.id, msgId, mode)
+        }
         regeneratingMsgId={regeneratingMsgId}
         onSwipeMessageVariant={(msgId, dir) =>
           activeChar && handleSwipeMessageVariant(activeChar.id, msgId, dir)

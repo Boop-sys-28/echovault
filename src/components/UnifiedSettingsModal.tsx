@@ -64,6 +64,11 @@ import {
 } from '../utils/memory';
 import { PWAInstallButton } from './PWAInstallButton';
 import { resolveAvatarUrl, handleAvatarImageError } from '../utils/avatarHelper';
+import {
+  estimateVaultStorageUsage,
+  VaultStorageEstimate,
+  formatStorageBytes,
+} from '../utils/idbStorage';
 
 export type SettingsTabId =
   | 'account'
@@ -260,47 +265,37 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
   const [storageRefreshTick, setStorageRefreshTick] = useState(0);
   const [confirmClearAllMemories, setConfirmClearAllMemories] = useState(false);
   const [exportToast, setExportToast] = useState(false);
-
-  // Compute localStorage breakdown
-  const storageStats = useMemo(() => {
-    let totalBytes = 0;
-    let chatBytes = 0;
-    let memoryBytes = 0;
-    let customCharBytes = 0;
-    let settingsBytes = 0;
-
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (!key) continue;
-        const val = localStorage.getItem(key) || '';
-        const bytes = (key.length + val.length) * 2; // UTF-16 estimate
-        totalBytes += bytes;
-
-        if (key.includes('chats') || key.includes('convos')) {
-          chatBytes += bytes;
-        } else if (key.startsWith('pulsedirect_memory_')) {
-          memoryBytes += bytes;
-        } else if (key.includes('custom_characters')) {
-          customCharBytes += bytes;
-        } else {
-          settingsBytes += bytes;
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    const maxBytes = 5 * 1024 * 1024; // 5 MB standard localStorage quota
-    const percentUsed = Math.min(100, Math.max(0.5, (totalBytes / maxBytes) * 100));
-
+  const [storageStats, setStorageStats] = useState<VaultStorageEstimate>(() => {
+    const initialChatBytes = JSON.stringify(chats || {}).length * 2;
     return {
-      totalKB: (totalBytes / 1024).toFixed(1),
-      chatKB: (chatBytes / 1024).toFixed(1),
-      memoryKB: (memoryBytes / 1024).toFixed(1),
-      customCharKB: (customCharBytes / 1024).toFixed(1),
-      settingsKB: (settingsBytes / 1024).toFixed(1),
-      percentUsed,
+      totalUsedBytes: initialChatBytes,
+      quotaBytes: 1024 * 1024 * 1024,
+      chatBytes: initialChatBytes,
+      memoryBytes: 0,
+      customCharBytes: 0,
+      settingsBytes: 0,
+      percentUsed: 0.4,
+      isDynamicQuota: false,
+      formattedUsed: formatStorageBytes(initialChatBytes),
+      formattedQuota: '1.00 GB',
+      formattedChat: formatStorageBytes(initialChatBytes),
+      formattedMemory: '0.0 KB',
+      formattedCustomChar: '0.0 KB',
+      formattedSettings: '0.0 KB',
+    };
+  });
+
+  // Compute IndexedDB + StorageManager dynamic storage estimate
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    estimateVaultStorageUsage(chats).then(est => {
+      if (!cancelled) {
+        setStorageStats(est);
+      }
+    });
+    return () => {
+      cancelled = true;
     };
   }, [isOpen, chats, storageRefreshTick]);
 
@@ -1776,15 +1771,23 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
             ========================================================= */}
             {activeTab === 'storage' && (
               <div className="space-y-5 max-w-3xl">
-                {/* LocalStorage Usage Meter */}
+                {/* IndexedDB & Browser Vault Storage Usage Meter */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-white/[0.02] border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                      <Database className="w-3.5 h-3.5 text-purple-400" />
-                      <span>Browser Vault Storage Usage</span>
-                    </h4>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                        <Database className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Browser Vault Storage Usage</span>
+                      </h4>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        IndexedDB Engine Active
+                      </span>
+                    </div>
                     <span className="text-xs font-mono font-bold text-purple-300">
-                      {storageStats.totalKB} KB / 5,120 KB
+                      {storageStats.formattedUsed} / {storageStats.formattedQuota}{' '}
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        ({storageStats.isDynamicQuota ? 'StorageManager Quota' : 'IndexedDB Quota'})
+                      </span>
                     </span>
                   </div>
 
@@ -1798,20 +1801,20 @@ export const UnifiedSettingsModal: React.FC<UnifiedSettingsModalProps> = ({
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                     <div className="p-2.5 rounded-xl bg-zinc-900/70 border border-white/5">
-                      <div className="text-[10px] text-slate-400">Chat Logs</div>
-                      <div className="text-xs font-bold text-white font-mono mt-0.5">{storageStats.chatKB} KB</div>
+                      <div className="text-[10px] text-slate-400">Chat Logs (IndexedDB)</div>
+                      <div className="text-xs font-bold text-white font-mono mt-0.5">{storageStats.formattedChat}</div>
                     </div>
                     <div className="p-2.5 rounded-xl bg-zinc-900/70 border border-white/5">
                       <div className="text-[10px] text-slate-400">Memory Vaults</div>
-                      <div className="text-xs font-bold text-purple-300 font-mono mt-0.5">{storageStats.memoryKB} KB</div>
+                      <div className="text-xs font-bold text-purple-300 font-mono mt-0.5">{storageStats.formattedMemory}</div>
                     </div>
                     <div className="p-2.5 rounded-xl bg-zinc-900/70 border border-white/5">
                       <div className="text-[10px] text-slate-400">Custom Profiles</div>
-                      <div className="text-xs font-bold text-cyan-300 font-mono mt-0.5">{storageStats.customCharKB} KB</div>
+                      <div className="text-xs font-bold text-cyan-300 font-mono mt-0.5">{storageStats.formattedCustomChar}</div>
                     </div>
                     <div className="p-2.5 rounded-xl bg-zinc-900/70 border border-white/5">
                       <div className="text-[10px] text-slate-400">System Config</div>
-                      <div className="text-xs font-bold text-slate-300 font-mono mt-0.5">{storageStats.settingsKB} KB</div>
+                      <div className="text-xs font-bold text-slate-300 font-mono mt-0.5">{storageStats.formattedSettings}</div>
                     </div>
                   </div>
                 </div>

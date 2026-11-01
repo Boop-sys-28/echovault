@@ -12,7 +12,7 @@ import {
   X,
   Users,
 } from 'lucide-react';
-import { Character, Message, UserProfile, DynamicGroupRoom } from '../types';
+import { Character, Message, UserProfile, DynamicGroupRoom, StoryItem } from '../types';
 import { resolveAvatarUrl, handleAvatarImageError, formatCompactNumber } from '../utils/avatarHelper';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -28,6 +28,7 @@ interface SidebarProps {
   userProfile: UserProfile | null;
   followedCharIds: string[];
   viewedStoryIds: string[];
+  activeStoriesMap?: Record<string, StoryItem>;
   onLogout: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
@@ -60,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userProfile,
   followedCharIds,
   viewedStoryIds,
+  activeStoriesMap = {},
   onLogout,
   searchQuery,
   onSearchChange,
@@ -80,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [sidebarCategory, setSidebarCategory] = useState<
-    'all' | 'motorsport' | 'music' | 'statesmen' | 'anime' | 'helluva' | 'dc' | 'gaming'
+    'all' | 'cinema' | 'motorsport' | 'music' | 'statesmen' | 'anime' | 'helluva' | 'dc' | 'gaming'
   >('all');
   const touchStartXRef = useRef<number | null>(null);
 
@@ -90,6 +92,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const matchesSidebarCategory = (char: Character) => {
     const u = String(char.universe);
     if (sidebarCategory === 'all') return true;
+    if (sidebarCategory === 'cinema') {
+      return ['Cinema & Screen Icons', 'Cinema', 'cinema', 'Hollywood', 'Bollywood'].includes(u);
+    }
     if (sidebarCategory === 'motorsport') {
       return ['Motorsport', 'motorsport', 'Top Gear', 'Automotive Icons', 'Formula 1'].includes(u);
     }
@@ -131,8 +136,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  // Characters with stories (filtered by active sidebar category)
-  const storyChars = characters.filter(c => !!c.storyImg && matchesSidebarCategory(c));
+  // Characters with active 24h stories (filtered by active sidebar category and sorted so fresh unviewed stories appear first)
+  const nowMs = Date.now();
+  const storyChars = characters
+    .filter(c => {
+      if (!matchesSidebarCategory(c)) return false;
+      const item = activeStoriesMap[c.id];
+      if (item) {
+        return nowMs < item.expiresAt && nowMs - item.timestamp < 24 * 60 * 60 * 1000;
+      }
+      return Boolean(c.storyImg);
+    })
+    .sort((a, b) => {
+      const aViewed = viewedStoryIds.includes(a.id) ? 1 : 0;
+      const bViewed = viewedStoryIds.includes(b.id) ? 1 : 0;
+      return aViewed - bViewed;
+    });
 
   // Filtered active conversations
   const filteredIds = activeConversationIds.filter(id => {
@@ -210,17 +229,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Stories Carousel */}
+      {/* 24-Hour Expiring Stories Carousel */}
       <div className="px-3.5 py-3 border-b border-white/10 bg-white/[0.01]">
         <div className="flex items-center justify-between mb-2 px-0.5">
           <span className="text-[11px] font-semibold text-slate-400">
-            Stories
+            Stories (24h)
+          </span>
+          <span className="text-[10px] text-cyan-400/80 font-mono">
+            {storyChars.filter(c => !viewedStoryIds.includes(c.id)).length} New
           </span>
         </div>
         <div className="flex items-center space-x-3.5 overflow-x-auto no-scrollbar touch-pan-x pb-1 px-0.5">
           {storyChars.map(char => {
             const isFollowed = followedCharIds.includes(char.id);
             const isViewed = viewedStoryIds.includes(char.id);
+            const storyItem = activeStoriesMap[char.id];
+            const storyTimeBadge = storyItem?.storyTime || char.storyTime || '24h';
 
             return (
               <div
@@ -235,19 +259,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="flex flex-col items-center flex-shrink-0 cursor-pointer group"
                 title={
                   !isFollowed
-                    ? `Follow ${char.name} to unlock story`
+                    ? `Follow ${char.name} to unlock story (${storyTimeBadge})`
                     : isViewed
-                    ? `Viewed story of ${char.name} (Click to re-watch)`
-                    : `View new story from ${char.name}`
+                    ? `Viewed story of ${char.name} (${storyTimeBadge} — Tap to re-watch)`
+                    : `Fresh story from ${char.name} (${storyTimeBadge})`
                 }
               >
                 <div
-                  className={`relative w-12 h-12 rounded-full p-0.5 transition transform group-hover:scale-105 shadow-md ${
+                  className={`relative w-12 h-12 rounded-full p-0.5 transition transform group-hover:scale-105 ${
                     !isFollowed
                       ? 'border-2 border-dashed border-amber-400/80 bg-zinc-900 shadow-amber-500/10'
                       : isViewed
-                      ? 'bg-zinc-600/90 ring-1 ring-zinc-500/40 shadow-none border border-zinc-600/60'
-                      : 'story-gradient shadow-pink-500/15'
+                      ? 'story-ring-viewed opacity-75'
+                      : 'story-ring-fresh'
                   }`}
                 >
                   <img
@@ -257,18 +281,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     crossOrigin="anonymous"
                     onError={(e) => handleAvatarImageError(e, char.name, char.themeAccent)}
                     className={`w-full h-full rounded-full object-cover object-top border-2 border-[#0d0f17] bg-[#161a2b] ${
-                      !isFollowed ? 'brightness-75' : isViewed ? 'brightness-90' : ''
+                      !isFollowed ? 'brightness-75' : isViewed ? 'brightness-75 saturate-75' : ''
                     }`}
                   />
-                  {!isFollowed && (
+                  {!isFollowed ? (
                     <span className="absolute -bottom-1 -right-1 p-1 rounded-full bg-amber-500 text-zinc-950 shadow-md">
                       <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
                     </span>
-                  )}
+                  ) : !isViewed ? (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-cyan-400 border-2 border-[#0d0f17] shadow-sm shadow-cyan-400/80" />
+                  ) : null}
                 </div>
                 <span className="text-[10px] text-slate-300 mt-1 max-w-[56px] truncate font-medium flex items-center justify-center gap-0.5">
                   {!isFollowed && <Lock className="w-2 h-2 text-amber-400" />}
-                  <span className={isViewed && isFollowed ? 'text-slate-400' : ''}>
+                  <span className={isViewed && isFollowed ? 'text-slate-500' : 'text-slate-200'}>
                     {char.name.split(' ')[0]}
                   </span>
                 </span>
@@ -294,6 +320,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar touch-pan-x pb-0.5">
           {[
             { id: 'all', label: 'All' },
+            { id: 'cinema', label: 'Cinema & Screen Icons' },
             { id: 'motorsport', label: 'Motorsport' },
             { id: 'music', label: 'Music Legends' },
             { id: 'statesmen', label: 'Statesmen & Strategists' },

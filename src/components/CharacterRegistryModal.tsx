@@ -14,6 +14,7 @@ interface CharacterRegistryModalProps {
 
 type CategoryFilter =
   | 'all'
+  | 'cinema'
   | 'motorsport'
   | 'music'
   | 'statesmen'
@@ -66,10 +67,15 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
       'Statesmen',
     ].includes(u);
 
+  const isCinemaUniverse = (u: Universe) =>
+    ['Cinema & Screen Icons', 'Cinema', 'cinema', 'Hollywood', 'Bollywood'].includes(u);
+
   const filtered = characters.filter(c => {
     const matchesCategory =
       filter === 'all'
         ? true
+        : filter === 'cinema'
+        ? isCinemaUniverse(c.universe)
         : filter === 'motorsport'
         ? isMotorsportUniverse(c.universe)
         : filter === 'music'
@@ -144,6 +150,11 @@ export const CharacterRegistryModal: React.FC<CharacterRegistryModalProps> = ({
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 touch-pan-x pb-1 px-1 w-full">
             {[
               { id: 'all' as CategoryFilter, label: 'All Characters', count: characters.length },
+              {
+                id: 'cinema' as CategoryFilter,
+                label: 'Cinema & Screen Icons',
+                count: characters.filter(c => isCinemaUniverse(c.universe)).length,
+              },
               {
                 id: 'motorsport' as CategoryFilter,
                 label: 'Motorsport',

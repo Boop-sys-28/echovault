@@ -472,7 +472,98 @@ export function getRelationshipTierFromAffinity(
   if (affinity < 25) return 'Acquaintance';
   if (affinity < 45) return 'Trusted';
   if (affinity < 70) return 'Close';
-  return 'Devoted';
+  return 'Partner / Devoted';
+}
+
+export function getBondProgressMetrics(bondScore: number): {
+  tier: RelationshipScoreBreakdown['tier'];
+  nextTier: string;
+  progressPercent: number;
+  barColorClass: string;
+  badgeColorClass: string;
+} {
+  const tier = getRelationshipTierFromAffinity(bondScore);
+  if (bondScore <= -20) {
+    return {
+      tier,
+      nextTier: 'Stranger (-19)',
+      progressPercent: Math.max(5, Math.min(100, ((bondScore + 100) / 80) * 100)),
+      barColorClass: 'from-rose-600 to-red-500',
+      badgeColorClass: 'text-rose-300 border-rose-500/40 bg-rose-500/15',
+    };
+  }
+  if (bondScore < 10) {
+    // Stranger: -19 to 9 -> next at 10
+    const pct = Math.max(6, Math.min(100, ((Math.max(0, bondScore)) / 10) * 100));
+    return {
+      tier: 'Stranger',
+      nextTier: 'Acquaintance (10)',
+      progressPercent: pct,
+      barColorClass: 'from-slate-400 to-indigo-400',
+      badgeColorClass: 'text-slate-300 border-white/15 bg-white/[0.06]',
+    };
+  }
+  if (bondScore < 25) {
+    // Acquaintance: 10 to 24 -> next at 25
+    const pct = Math.max(10, Math.min(100, ((bondScore - 10) / 15) * 100));
+    return {
+      tier: 'Acquaintance',
+      nextTier: 'Trusted (25)',
+      progressPercent: pct,
+      barColorClass: 'from-cyan-500 to-blue-500',
+      badgeColorClass: 'text-cyan-300 border-cyan-500/35 bg-cyan-500/15',
+    };
+  }
+  if (bondScore < 45) {
+    // Trusted: 25 to 44 -> next at 45
+    const pct = Math.max(10, Math.min(100, ((bondScore - 25) / 20) * 100));
+    return {
+      tier: 'Trusted',
+      nextTier: 'Close (45)',
+      progressPercent: pct,
+      barColorClass: 'from-emerald-500 to-teal-400',
+      badgeColorClass: 'text-emerald-300 border-emerald-500/35 bg-emerald-500/15',
+    };
+  }
+  if (bondScore < 70) {
+    // Close: 45 to 69 -> next at 70 (Partner / Devoted)
+    const pct = Math.max(10, Math.min(100, ((bondScore - 45) / 25) * 100));
+    return {
+      tier: 'Close',
+      nextTier: 'Partner / Devoted (70)',
+      progressPercent: pct,
+      barColorClass: 'from-purple-500 to-fuchsia-500',
+      badgeColorClass: 'text-purple-200 border-purple-500/40 bg-purple-500/20',
+    };
+  }
+  // Partner / Devoted: 70 to 100
+  const pct = Math.max(25, Math.min(100, ((bondScore - 70) / 30) * 100));
+  return {
+    tier: 'Partner / Devoted',
+    nextTier: 'Max Bond (100)',
+    progressPercent: pct,
+    barColorClass: 'from-pink-500 via-fuchsia-500 to-amber-400',
+    badgeColorClass: 'text-pink-200 border-pink-500/45 bg-pink-500/20',
+  };
+}
+
+export function buildBondToneInstruction(bondScore: number, charName: string): string {
+  const tier = getRelationshipTierFromAffinity(bondScore);
+  switch (tier) {
+    case 'Enemy':
+      return `[BOND TIER: ENEMY (${bondScore}/100)]: You are openly hostile, distrustful, sharp-tongued, or cold toward the user due to past friction, while staying 100% in your canon personality as ${charName}.`;
+    case 'Stranger':
+      return `[BOND TIER: STRANGER (${bondScore}/100)]: You barely know the user yet. Maintain your authentic canon guard, skepticism, or professional distance until they earn your familiarity.`;
+    case 'Acquaintance':
+      return `[BOND TIER: ACQUAINTANCE (${bondScore}/100)]: You recognize the user and have shared a few exchanges. Your guard is lowering slightly—engage with casual banter and growing curiosity in your canon voice.`;
+    case 'Trusted':
+      return `[BOND TIER: TRUSTED (${bondScore}/100)]: The user has earned your genuine trust and respect. You speak more openly, share personal thoughts or dry humor, and have their back when it counts.`;
+    case 'Close':
+      return `[BOND TIER: CLOSE (${bondScore}/100)]: You share a strong, close bond with the user. Drop your defensive walls around them, show warmth or protective loyalty in your unique canon way, and treat them as your inner circle.`;
+    case 'Partner / Devoted':
+    case 'Devoted':
+      return `[BOND TIER: PARTNER / DEVOTED (${bondScore}/100)]: You share an unbreakable, deeply devoted bond with the user. Express rare emotional honesty, fierce protectiveness, affectionate closeness, and ride-or-die loyalty while remaining unmistakably ${charName}.`;
+  }
 }
 
 export function evaluateTurnAffinityChange(

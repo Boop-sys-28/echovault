@@ -27,7 +27,11 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Heart,
   RotateCw,
+  RotateCcw,
 } from 'lucide-react';
 import {
   Character,
@@ -49,11 +53,13 @@ import {
   extractFactsFromUserMessage,
   addCharacterMemory,
 } from '../utils/memory';
+import { getBondProgressMetrics } from '../utils/caiImporter';
 
 interface ChatViewportProps {
   character?: Character;
   activeGroupRoom?: DynamicGroupRoom;
   groupMessages?: BacklogMessage[];
+  groupTypingSenderName?: string | null;
   onSendGroupMessage?: (text: string) => void;
   scoreBreakdown?: RelationshipScoreBreakdown;
   onOpenScoreModal?: () => void;
@@ -76,6 +82,7 @@ interface ChatViewportProps {
   onClearChat?: () => void;
   onDeleteChat?: () => void;
   onDeleteMessage?: (msgId: string) => void;
+  onRewindToMessage?: (msgId: string, mode?: 'regenerate' | 'edit') => void;
   regeneratingMsgId?: string | null;
   onSwipeMessageVariant?: (msgId: string, direction: 'prev' | 'next') => void;
   onRegenerateMessageVariant?: (msgId: string) => void;
@@ -104,19 +111,43 @@ interface ChatViewportProps {
 }
 
 /**
- * Formats Character.AI-style roleplay actions wrapped in *asterisks* into italicized spans.
+ * Highlights matching search keywords inside plain text segments.
  */
-function renderRoleplayText(text: string): React.ReactNode {
+function highlightKeywordInText(segment: string, query?: string): React.ReactNode {
+  if (!query || !query.trim()) return segment;
+  const escaped = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escaped})`, 'gi');
+  const chunks = segment.split(regex);
+  if (chunks.length <= 1) return segment;
+  return chunks.map((chunk, i) =>
+    chunk.toLowerCase() === query.trim().toLowerCase() ? (
+      <mark
+        key={i}
+        className="bg-amber-400/35 text-amber-100 px-0.5 rounded ring-1 ring-amber-400/60 font-semibold"
+      >
+        {chunk}
+      </mark>
+    ) : (
+      <React.Fragment key={i}>{chunk}</React.Fragment>
+    )
+  );
+}
+
+/**
+ * Formats Character.AI-style roleplay actions wrapped in *asterisks* into italicized spans,
+ * and highlights any active in-chat search keyword.
+ */
+function renderRoleplayText(text: string, searchQuery?: string): React.ReactNode {
   const parts = text.split(/(\*[^*]+\*)/g);
   return parts.map((part, idx) => {
     if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
       return (
         <em key={idx} className="italic text-purple-200/85 font-normal">
-          {part}
+          {highlightKeywordInText(part, searchQuery)}
         </em>
       );
     }
-    return <React.Fragment key={idx}>{part}</React.Fragment>;
+    return <React.Fragment key={idx}>{highlightKeywordInText(part, searchQuery)}</React.Fragment>;
   });
 }
 
@@ -124,6 +155,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   character,
   activeGroupRoom,
   groupMessages = [],
+  groupTypingSenderName = null,
   onSendGroupMessage,
   scoreBreakdown,
   onOpenScoreModal,
@@ -144,6 +176,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
   onClearChat,
   onDeleteChat,
   onDeleteMessage,
+  onRewindToMessage,
   regeneratingMsgId = null,
   onSwipeMessageVariant,
   onRegenerateMessageVariant,
@@ -171,9 +204,16 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 }) => {
   const feedEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const chatSearchInputRef = useRef<HTMLInputElement>(null);
   const [emptySearch, setEmptySearch] = useState('');
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
+  const [confirmingRewindMsgId, setConfirmingRewindMsgId] = useState<string | null>(null);
+
+  // In-Chat Full-Text Search State
+  const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [activeSearchMatchIdx, setActiveSearchMatchIdx] = useState(0);
 
   const activeTheme = THEME_DEFINITIONS[themeConfig?.themeId || 'cyberpunk'] || THEME_DEFINITIONS.cyberpunk;
   const bubbleStyle = themeConfig?.bubbleStyle || 'modern_gradient';
@@ -208,6 +248,13 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     }
   }, [replyingTo]);
 
+  // Reset in-chat search when switching active character or group room
+  useEffect(() => {
+    setIsChatSearchOpen(false);
+    setChatSearchQuery('');
+    setActiveSearchMatchIdx(0);
+  }, [character?.id, activeGroupRoom?.id]);
+
   const scrollToMessage = (msgId: string) => {
     const el = document.getElementById(msgId);
     if (el) {
@@ -226,51 +273,176 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
       ? allCharacters.find(c => c.id === activeGroupRoom.unlockedBy)
       : undefined;
 
+    const trimmedGroupQuery = chatSearchQuery.trim().toLowerCase();
+    const matchedGroupMsgIds = trimmedGroupQuery
+      ? groupMessages
+          .filter(
+            m =>
+              !m.isSystemDivider &&
+              (m.text.toLowerCase().includes(trimmedGroupQuery) ||
+                m.senderName.toLowerCase().includes(trimmedGroupQuery))
+          )
+          .map(m => m.id)
+      : [];
+
+    const jumpGroupSearchMatch = (direction: 'prev' | 'next') => {
+      if (matchedGroupMsgIds.length === 0) return;
+      const nextIdx =
+        direction === 'prev'
+          ? (activeSearchMatchIdx - 1 + matchedGroupMsgIds.length) % matchedGroupMsgIds.length
+          : (activeSearchMatchIdx + 1) % matchedGroupMsgIds.length;
+      setActiveSearchMatchIdx(nextIdx);
+      scrollToMessage(matchedGroupMsgIds[nextIdx]);
+    };
+
     return (
       <main className="flex-1 flex flex-col h-full bg-[#090a0f] relative min-w-0">
-        <header className="sticky top-0 shrink-0 px-3 py-2.5 md:px-5 md:py-3 border-b border-white/10 bg-[#0d0f17]/85 backdrop-blur-xl flex items-center justify-between gap-2 z-20">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <button
-              onClick={onToggleMobileSidebar}
-              className="md:hidden p-2 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.06] transition flex-shrink-0 cursor-pointer"
-              aria-label="Open menu"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
+        <header className="sticky top-0 shrink-0 border-b border-white/10 bg-[#0d0f17]/85 backdrop-blur-xl z-20">
+          <div className="px-3 py-2.5 md:px-5 md:py-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <button
+                onClick={onToggleMobileSidebar}
+                className="md:hidden p-2 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.06] transition flex-shrink-0 cursor-pointer"
+                aria-label="Open menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
 
-            <div className="flex -space-x-2 overflow-hidden flex-shrink-0">
-              {roomMembers.map(member => (
-                <img
-                  key={member.id}
-                  src={resolveAvatarUrl(member.avatarUrl || member.avatar, member.id)}
-                  alt={member.name}
-                  referrerPolicy="no-referrer"
-                  crossOrigin="anonymous"
-                  onClick={() => onSelectCharacter(member.id)}
-                  onError={(e) => handleAvatarImageError(e, member.name, member.themeAccent)}
-                  title={`Open DM with ${member.name}`}
-                  className="inline-block h-8 w-8 rounded-full ring-2 ring-[#0d0f17] object-cover object-top bg-[#161a2b] cursor-pointer hover:scale-105 transition"
-                />
-              ))}
+              <div className="flex -space-x-2 overflow-hidden flex-shrink-0">
+                {roomMembers.map(member => (
+                  <img
+                    key={member.id}
+                    src={resolveAvatarUrl(member.avatarUrl || member.avatar, member.id)}
+                    alt={member.name}
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    onClick={() => onSelectCharacter(member.id)}
+                    onError={(e) => handleAvatarImageError(e, member.name, member.themeAccent)}
+                    title={`Open DM with ${member.name}`}
+                    className="inline-block h-8 w-8 rounded-full ring-2 ring-[#0d0f17] object-cover object-top bg-[#161a2b] cursor-pointer hover:scale-105 transition"
+                  />
+                ))}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-white truncate">
+                    {activeGroupRoom.name}
+                  </h2>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold flex items-center gap-1 flex-shrink-0">
+                    <Users className="w-2.5 h-2.5" />
+                    <span>{roomMembers.length} Members</span>
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                  {inviter
+                    ? `Authorized by ${inviter.name} • Active Encrypted Comms`
+                    : roomMembers.map(m => m.name.split(' ')[0]).join(', ')}
+                </p>
+              </div>
             </div>
 
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-white truncate">
-                  {activeGroupRoom.name}
-                </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold flex items-center gap-1 flex-shrink-0">
-                  <Users className="w-2.5 h-2.5" />
-                  <span>{roomMembers.length} Members</span>
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                {inviter
-                  ? `Authorized by ${inviter.name} • Active Encrypted Comms`
-                  : roomMembers.map(m => m.name.split(' ')[0]).join(', ')}
-              </p>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChatSearchOpen(prev => {
+                    const next = !prev;
+                    if (next) {
+                      setTimeout(() => chatSearchInputRef.current?.focus(), 40);
+                    } else {
+                      setChatSearchQuery('');
+                    }
+                    return next;
+                  });
+                }}
+                title="Search in conversation"
+                className={`p-2 rounded-xl transition cursor-pointer ${
+                  isChatSearchOpen
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                    : 'hover:bg-white/[0.06] text-slate-300 hover:text-white'
+                }`}
+              >
+                <Search className="w-4 h-4" />
+              </button>
             </div>
           </div>
+
+          {/* Collapsible In-Chat Quick Search Bar (Group Room) */}
+          {isChatSearchOpen && (
+            <div className="px-3 py-2 md:px-5 bg-[#121522]/95 border-t border-white/10 flex items-center gap-2">
+              <Search className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+              <input
+                ref={chatSearchInputRef}
+                type="text"
+                value={chatSearchQuery}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setChatSearchQuery(val);
+                  setActiveSearchMatchIdx(0);
+                  const q = val.trim().toLowerCase();
+                  if (q) {
+                    const firstHit = groupMessages.find(
+                      m =>
+                        !m.isSystemDivider &&
+                        (m.text.toLowerCase().includes(q) ||
+                          m.senderName.toLowerCase().includes(q))
+                    );
+                    if (firstHit) scrollToMessage(firstHit.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    jumpGroupSearchMatch(e.shiftKey ? 'prev' : 'next');
+                  } else if (e.key === 'Escape') {
+                    setIsChatSearchOpen(false);
+                    setChatSearchQuery('');
+                  }
+                }}
+                placeholder="Search messages in this channel..."
+                className="flex-1 bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none min-w-0"
+              />
+              {trimmedGroupQuery && (
+                <span className="text-[10px] font-mono text-slate-400 tabular-nums flex-shrink-0">
+                  {matchedGroupMsgIds.length > 0
+                    ? `${Math.min(activeSearchMatchIdx + 1, matchedGroupMsgIds.length)} / ${matchedGroupMsgIds.length}`
+                    : '0 matches'}
+                </span>
+              )}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  type="button"
+                  disabled={matchedGroupMsgIds.length === 0}
+                  onClick={() => jumpGroupSearchMatch('prev')}
+                  title="Previous match"
+                  className="p-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] disabled:opacity-30 text-slate-300 transition cursor-pointer"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={matchedGroupMsgIds.length === 0}
+                  onClick={() => jumpGroupSearchMatch('next')}
+                  title="Next match"
+                  className="p-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] disabled:opacity-30 text-slate-300 transition cursor-pointer"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsChatSearchOpen(false);
+                    setChatSearchQuery('');
+                  }}
+                  title="Close search"
+                  className="p-1 rounded-lg hover:bg-white/[0.1] text-slate-400 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </header>
 
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-3 relative">
@@ -290,11 +462,18 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
             const isUser = msg.senderId === 'user';
             const senderChar = allCharacters.find(c => c.id === msg.senderId);
+            const isHighlighted =
+              highlightedMsgId === msg.id ||
+              (matchedGroupMsgIds.length > 0 &&
+                matchedGroupMsgIds[activeSearchMatchIdx] === msg.id);
 
             return (
               <div
                 key={msg.id}
-                className={`flex items-start gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} msg-pop`}
+                id={msg.id}
+                className={`flex items-start gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} msg-pop transition-all duration-300 rounded-2xl ${
+                  isHighlighted ? 'bg-purple-500/20 p-1 ring-1 ring-purple-400/50' : ''
+                }`}
               >
                 {!isUser && (
                   <img
@@ -310,7 +489,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[75%]`}>
                   {!isUser && (
                     <span className="text-[11px] font-bold text-indigo-300 mb-0.5 px-1">
-                      {msg.senderName}
+                      {highlightKeywordInText(msg.senderName, chatSearchQuery)}
                     </span>
                   )}
                   <div
@@ -318,7 +497,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                       isUser ? userBubbleShape : charBubbleShape
                     }`}
                   >
-                    {renderRoleplayText(msg.text)}
+                    {renderRoleplayText(msg.text, chatSearchQuery)}
                   </div>
                   <span className="text-[10px] text-slate-500 mt-1 px-1 tabular-nums">
                     {msg.timestamp}
@@ -336,7 +515,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 <span className="w-2 h-2 rounded-full bg-slate-400 typing-dot-3"></span>
               </div>
               <span className="text-[10px] text-slate-500 px-2 mt-1">
-                Channel member is typing...
+                {groupTypingSenderName
+                  ? `${groupTypingSenderName} is typing...`
+                  : 'Channel member is typing...'}
               </span>
             </div>
           )}
@@ -518,6 +699,23 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     });
   }
 
+  const trimmedChatQuery = chatSearchQuery.trim().toLowerCase();
+  const matchedMsgIds = trimmedChatQuery
+    ? renderedMessages
+        .filter(m => m.text.toLowerCase().includes(trimmedChatQuery))
+        .map(m => m.id)
+    : [];
+
+  const jumpChatSearchMatch = (direction: 'prev' | 'next') => {
+    if (matchedMsgIds.length === 0) return;
+    const nextIdx =
+      direction === 'prev'
+        ? (activeSearchMatchIdx - 1 + matchedMsgIds.length) % matchedMsgIds.length
+        : (activeSearchMatchIdx + 1) % matchedMsgIds.length;
+    setActiveSearchMatchIdx(nextIdx);
+    scrollToMessage(matchedMsgIds[nextIdx]);
+  };
+
   const handleAvatarClick = () => {
     if (!character.storyImg) return;
     if (isFollowed) {
@@ -527,306 +725,411 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     }
   };
 
-  const currentAffinity = scoreBreakdown?.affinity ?? 0;
-  const currentTier = scoreBreakdown?.tier ?? 'Stranger';
+  const currentBondScore = scoreBreakdown?.bondScore ?? scoreBreakdown?.affinity ?? 0;
+  const bondMetrics = getBondProgressMetrics(currentBondScore);
 
   return (
     <main className="flex-1 flex flex-col h-full bg-[#090a0f] relative min-w-0">
       {/* Sleek Glassmorphic Header */}
-      <header className="sticky top-0 shrink-0 px-3 py-2.5 md:px-5 md:py-3 border-b border-white/10 bg-[#0d0f17]/85 backdrop-blur-xl flex items-center justify-between gap-2 z-20">
-        <div className="flex items-center gap-2.5 md:gap-3 min-w-0 flex-1">
-          <button
-            onClick={onToggleMobileSidebar}
-            className="md:hidden p-2 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.06] transition flex-shrink-0 cursor-pointer"
-            aria-label="Open menu"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
+      <header className="sticky top-0 shrink-0 border-b border-white/10 bg-[#0d0f17]/85 backdrop-blur-xl z-20">
+        <div className="px-3 py-2.5 md:px-5 md:py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 md:gap-3 min-w-0 flex-1">
+            <button
+              onClick={onToggleMobileSidebar}
+              className="md:hidden p-2 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.06] transition flex-shrink-0 cursor-pointer"
+              aria-label="Open menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
 
-          <div
-            className={`relative flex-shrink-0 cursor-pointer ${character.storyImg ? 'hover:scale-105 transition' : ''}`}
-            onClick={handleAvatarClick}
-            title={
-              character.storyImg
-                ? !isFollowed
-                  ? `Follow ${character.name} to view story`
-                  : isStoryViewed
-                  ? `Viewed story of ${character.name} (Click to re-watch)`
-                  : `View new story from ${character.name}`
-                : character.name
-            }
-          >
             <div
-              className={`w-9 h-9 md:w-10 md:h-10 rounded-full p-0.5 transition ${
+              className={`relative flex-shrink-0 cursor-pointer ${character.storyImg ? 'hover:scale-105 transition' : ''}`}
+              onClick={handleAvatarClick}
+              title={
                 character.storyImg
                   ? !isFollowed
-                    ? 'border-2 border-dashed border-amber-400/80 bg-zinc-900'
+                    ? `Follow ${character.name} to view story`
                     : isStoryViewed
-                    ? 'bg-zinc-600/90 ring-1 ring-zinc-500/40 border border-zinc-600/60'
-                    : 'story-gradient'
-                  : 'bg-[#1a1e2e]'
-              }`}
+                    ? `Viewed story of ${character.name} (Click to re-watch)`
+                    : `View fresh 24h story from ${character.name}`
+                  : character.name
+              }
             >
-              <img
-                src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
-                alt={character.name}
-                referrerPolicy="no-referrer"
-                crossOrigin="anonymous"
-                onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
-                className={`w-full h-full rounded-full object-cover object-top border-2 border-[#090a0f] bg-[#1a1e2e] ${
-                  character.storyImg && !isFollowed
-                    ? 'brightness-75'
-                    : isStoryViewed
-                    ? 'brightness-90'
-                    : ''
+              <div
+                className={`w-9 h-9 md:w-10 md:h-10 rounded-full p-0.5 transition ${
+                  character.storyImg
+                    ? !isFollowed
+                      ? 'border-2 border-dashed border-amber-400/80 bg-zinc-900'
+                      : isStoryViewed
+                      ? 'story-ring-viewed opacity-80'
+                      : 'story-ring-fresh'
+                    : 'bg-[#1a1e2e]'
                 }`}
-              />
-            </div>
-            {character.storyImg && !isFollowed && (
-              <span className="absolute -bottom-1 -right-1 p-0.5 rounded-full bg-amber-500 text-zinc-950 shadow-md">
-                <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
-              </span>
-            )}
-            {character.online && (isFollowed || !character.storyImg) && (
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#090a0f]"></span>
-            )}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <h2 className="text-sm font-bold text-white truncate">
-                {character.name}
-              </h2>
-              {onToggleFollow && (
-                <button
-                  type="button"
-                  onClick={onToggleFollow}
-                  className={`text-[11px] px-2 py-0.5 rounded-lg font-medium transition flex items-center gap-1 flex-shrink-0 cursor-pointer ${
-                    isFollowed
-                      ? 'bg-white/[0.06] text-slate-300 border border-white/10 hover:bg-white/[0.1]'
-                      : 'bg-purple-600/30 text-purple-200 border border-purple-500/40 hover:bg-purple-600/50'
+              >
+                <img
+                  src={resolveAvatarUrl(character.avatarUrl || character.avatar, character.id)}
+                  alt={character.name}
+                  referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
+                  onError={(e) => handleAvatarImageError(e, character.name, character.themeAccent)}
+                  className={`w-full h-full rounded-full object-cover object-top border-2 border-[#090a0f] bg-[#1a1e2e] ${
+                    character.storyImg && !isFollowed
+                      ? 'brightness-75'
+                      : isStoryViewed
+                      ? 'brightness-75 saturate-75'
+                      : ''
                   }`}
-                >
-                  {isFollowed ? (
-                    <>
-                      <UserCheck className="w-3 h-3 text-emerald-400" />
-                      <span className="hidden sm:inline">Following</span>
-                    </>
-                  ) : (
-                    <>
-                      <UserPlus className="w-3 h-3" />
-                      <span className="hidden sm:inline">Follow</span>
-                    </>
-                  )}
-                </button>
+                />
+              </div>
+              {character.storyImg && !isFollowed && (
+                <span className="absolute -bottom-1 -right-1 p-0.5 rounded-full bg-amber-500 text-zinc-950 shadow-md">
+                  <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
+                </span>
               )}
+              {character.online && (isFollowed || !character.storyImg) && (
+                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#090a0f]"></span>
+              )}
+            </div>
 
-              {/* Relationship Score & Diagnostics Badge */}
-              {onOpenScoreModal && (
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <h2 className="text-sm font-bold text-white truncate">
+                  {character.name}
+                </h2>
+                {onToggleFollow && (
+                  <button
+                    type="button"
+                    onClick={onToggleFollow}
+                    className={`text-[11px] px-2 py-0.5 rounded-lg font-medium transition flex items-center gap-1 flex-shrink-0 cursor-pointer ${
+                      isFollowed
+                        ? 'bg-white/[0.06] text-slate-300 border border-white/10 hover:bg-white/[0.1]'
+                        : 'bg-purple-600/30 text-purple-200 border border-purple-500/40 hover:bg-purple-600/50'
+                    }`}
+                  >
+                    {isFollowed ? (
+                      <>
+                        <UserCheck className="w-3 h-3 text-emerald-400" />
+                        <span className="hidden sm:inline">Following</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-3 h-3" />
+                        <span className="hidden sm:inline">Follow</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {/* Dynamic Bond & Relationship Progression Pill + Sleek Progress Bar */}
                 <button
                   type="button"
                   onClick={onOpenScoreModal}
-                  title="Inspect Relationship Diagnostics & Import C.AI Transcript"
-                  className="text-[11px] px-2 py-0.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 font-semibold transition flex items-center gap-1 flex-shrink-0 cursor-pointer"
+                  title={`Bond Status: ${bondMetrics.tier} (${currentBondScore > 0 ? `+${currentBondScore}` : currentBondScore}/100) • Next Tier: ${bondMetrics.nextTier}. Click to inspect relationship diagnostics.`}
+                  className={`px-2.5 py-0.5 rounded-xl border text-[11px] font-semibold transition flex items-center gap-2 flex-shrink-0 cursor-pointer hover:brightness-110 ${bondMetrics.badgeColorClass}`}
                 >
-                  <Activity className="w-3 h-3 text-indigo-400" />
-                  <span>{currentTier}</span>
-                  <span className={currentAffinity >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                    ({currentAffinity > 0 ? `+${currentAffinity}` : currentAffinity})
+                  <span className="inline-flex items-center gap-1">
+                    <Heart className="w-3 h-3 fill-current opacity-85" />
+                    <span>{bondMetrics.tier}</span>
+                    <span className="font-mono text-[10px] opacity-90">
+                      ({currentBondScore > 0 ? `+${currentBondScore}` : currentBondScore})
+                    </span>
                   </span>
+                  <div className="w-14 sm:w-20 h-1.5 rounded-full bg-black/40 border border-white/10 overflow-hidden">
+                    <div
+                      className={`h-full bg-gradient-to-r ${bondMetrics.barColorClass} transition-all duration-500 rounded-full`}
+                      style={{ width: `${bondMetrics.progressPercent}%` }}
+                    />
+                  </div>
                 </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate mt-0.5">
-              <span className="inline-flex items-center gap-1 text-zinc-300 font-medium flex-shrink-0">
-                <Users className="w-3 h-3 text-purple-400" />
-                <span>{formatCompactNumber(character.userCount || 1200)} operatives chatted • {character.online ? 'Active' : 'Idle'}</span>
-              </span>
-              <span className="text-slate-600 flex-shrink-0">•</span>
-              <span className="inline-flex items-center gap-1 truncate min-w-0">
-                <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
-                <span className="truncate">{character.song}</span>
-              </span>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate mt-0.5">
+                <span className="inline-flex items-center gap-1 text-zinc-300 font-medium flex-shrink-0">
+                  <Users className="w-3 h-3 text-purple-400" />
+                  <span>{formatCompactNumber(character.userCount || 1200)} operatives chatted • {character.online ? 'Active' : 'Idle'}</span>
+                </span>
+                <span className="text-slate-600 flex-shrink-0">•</span>
+                <span className="inline-flex items-center gap-1 truncate min-w-0">
+                  <Music className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                  <span className="truncate">{character.song}</span>
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Streamlined Header Actions */}
-        <div className="flex items-center gap-1 text-slate-400 flex-shrink-0">
-          <button
-            onClick={onOpenPromptSpec}
-            title="Response Behavior Director"
-            className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-cyan-300 transition cursor-pointer"
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
-
-          {onOpenMemoryVault && (
-            <button
-              onClick={onOpenMemoryVault}
-              title={`Memories (${memoriesCount})`}
-              className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-purple-300 transition flex items-center gap-1 cursor-pointer"
-            >
-              <Brain className="w-4 h-4" />
-              {memoriesCount > 0 && (
-                <span className="text-[10px] font-semibold text-purple-300 tabular-nums">
-                  {memoriesCount}
-                </span>
-              )}
-            </button>
-          )}
-
-          <button
-            onClick={() => onStartCall('audio')}
-            title="Voice Call"
-            className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-white transition cursor-pointer"
-          >
-            <Phone className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={() => onStartCall('video')}
-            title="Video Call"
-            className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-white transition cursor-pointer"
-          >
-            <Video className="w-4 h-4" />
-          </button>
-
-          {/* More / Chat Options Menu */}
-          <div className="relative">
+          {/* Streamlined Header Actions */}
+          <div className="flex items-center gap-1 text-slate-400 flex-shrink-0">
+            {/* In-Chat Full-Text Search Toggle Button */}
             <button
               type="button"
-              onClick={() => setShowDeleteMenu(prev => !prev)}
-              title="More Options"
+              onClick={() => {
+                setIsChatSearchOpen(prev => {
+                  const next = !prev;
+                  if (next) {
+                    setTimeout(() => chatSearchInputRef.current?.focus(), 40);
+                  } else {
+                    setChatSearchQuery('');
+                  }
+                  return next;
+                });
+              }}
+              title="Search in conversation"
               className={`p-2 rounded-xl transition cursor-pointer ${
-                showDeleteMenu
+                isChatSearchOpen
                   ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
                   : 'hover:bg-white/[0.06] text-slate-300 hover:text-white'
               }`}
             >
-              <MoreVertical className="w-4 h-4" />
+              <Search className="w-4 h-4" />
             </button>
 
-            {showDeleteMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-[#121521]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-1.5 z-50 space-y-1">
-                {onOpenScoreModal && (
+            <button
+              onClick={onOpenPromptSpec}
+              title="Response Behavior Director"
+              className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-cyan-300 transition cursor-pointer"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+
+            {onOpenMemoryVault && (
+              <button
+                onClick={onOpenMemoryVault}
+                title={`Memories (${memoriesCount})`}
+                className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-purple-300 transition flex items-center gap-1 cursor-pointer"
+              >
+                <Brain className="w-4 h-4" />
+                {memoriesCount > 0 && (
+                  <span className="text-[10px] font-semibold text-purple-300 tabular-nums">
+                    {memoriesCount}
+                  </span>
+                )}
+              </button>
+            )}
+
+            <button
+              onClick={() => onStartCall('audio')}
+              title="Voice Call"
+              className="p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              <Phone className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => onStartCall('video')}
+              title="Video Call"
+              className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/[0.06] text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              <Video className="w-4 h-4" />
+            </button>
+
+            {/* More / Chat Options Menu */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowDeleteMenu(prev => !prev)}
+                title="More Options"
+                className={`p-2 rounded-xl transition cursor-pointer ${
+                  showDeleteMenu
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                    : 'hover:bg-white/[0.06] text-slate-300 hover:text-white'
+                }`}
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {showDeleteMenu && (
+                <div className="absolute right-0 mt-2 w-56 bg-[#121521]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-1.5 z-50 space-y-1">
+                  {onOpenScoreModal && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenScoreModal();
+                        setShowDeleteMenu(false);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-left text-xs text-indigo-300 hover:bg-indigo-500/15 flex items-center gap-2.5 font-medium transition cursor-pointer"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Status & Score Inspector</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => {
-                      onOpenScoreModal();
+                      onOpenPromptSpec();
                       setShowDeleteMenu(false);
                     }}
-                    className="w-full px-3 py-2 rounded-xl text-left text-xs text-indigo-300 hover:bg-indigo-500/15 flex items-center gap-2.5 font-medium transition cursor-pointer"
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs text-cyan-300 hover:bg-cyan-500/15 flex items-center gap-2.5 font-medium transition cursor-pointer"
                   >
-                    <Activity className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Status & Score Inspector</span>
+                    <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Response Behavior Director</span>
                   </button>
-                )}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onOpenPromptSpec();
-                    setShowDeleteMenu(false);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl text-left text-xs text-cyan-300 hover:bg-cyan-500/15 flex items-center gap-2.5 font-medium transition cursor-pointer"
-                >
-                  <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Response Behavior Director</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onStartCall('video');
+                      setShowDeleteMenu(false);
+                    }}
+                    className="sm:hidden w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
+                  >
+                    <Video className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Video Call</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onStartCall('video');
-                    setShowDeleteMenu(false);
-                  }}
-                  className="sm:hidden w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
-                >
-                  <Video className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Video Call</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onTriggerAwayMessage();
+                      setShowDeleteMenu(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
+                  >
+                    <Radio className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Simulate Check-In DM</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onTriggerAwayMessage();
-                    setShowDeleteMenu(false);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
-                >
-                  <Radio className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Simulate Check-In DM</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onToggleAutoAway();
+                      setShowDeleteMenu(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center justify-between transition cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Auto Check-In DMs</span>
+                    </span>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${autoAwayEnabled ? 'bg-cyan-500/20 text-cyan-300' : 'bg-white/5 text-slate-500'}`}>
+                      {autoAwayEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onToggleAutoAway();
-                    setShowDeleteMenu(false);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center justify-between transition cursor-pointer"
-                >
-                  <span className="flex items-center gap-2.5">
-                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Auto Check-In DMs</span>
-                  </span>
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${autoAwayEnabled ? 'bg-cyan-500/20 text-cyan-300' : 'bg-white/5 text-slate-500'}`}>
-                    {autoAwayEnabled ? 'ON' : 'OFF'}
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onToggleBurner();
+                      setShowDeleteMenu(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center justify-between transition cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <Flame className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Burner Mode</span>
+                    </span>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${burnerMode ? 'bg-amber-500/20 text-amber-300' : 'bg-white/5 text-slate-500'}`}>
+                      {burnerMode ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onToggleBurner();
-                    setShowDeleteMenu(false);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center justify-between transition cursor-pointer"
-                >
-                  <span className="flex items-center gap-2.5">
-                    <Flame className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Burner Mode</span>
-                  </span>
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${burnerMode ? 'bg-amber-500/20 text-amber-300' : 'bg-white/5 text-slate-500'}`}>
-                    {burnerMode ? 'ON' : 'OFF'}
-                  </span>
-                </button>
-
-                {(onClearChat || onDeleteChat) && (
-                  <div className="border-t border-white/10 my-1 pt-1 space-y-1">
-                    {onClearChat && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onClearChat();
-                          setShowDeleteMenu(false);
-                        }}
-                        className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Clear Messages</span>
-                      </button>
-                    )}
-                    {onDeleteChat && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDeleteChat();
-                          setShowDeleteMenu(false);
-                        }}
-                        className="w-full px-3 py-2 rounded-xl text-left text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-2.5 font-semibold transition cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                        <span>Delete Conversation</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+                  {(onClearChat || onDeleteChat) && (
+                    <div className="border-t border-white/10 my-1 pt-1 space-y-1">
+                      {onClearChat && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClearChat();
+                            setShowDeleteMenu(false);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs text-slate-200 hover:bg-white/10 flex items-center gap-2.5 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Clear Messages</span>
+                        </button>
+                      )}
+                      {onDeleteChat && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDeleteChat();
+                            setShowDeleteMenu(false);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs text-rose-300 hover:bg-rose-500/20 flex items-center gap-2.5 font-semibold transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Delete Conversation</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* Collapsible In-Chat Full-Text Search Bar */}
+        {isChatSearchOpen && (
+          <div className="px-3 py-2 md:px-5 bg-[#121522]/95 border-t border-white/10 flex items-center gap-2">
+            <Search className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+            <input
+              ref={chatSearchInputRef}
+              type="text"
+              value={chatSearchQuery}
+              onChange={(e) => {
+                const val = e.target.value;
+                setChatSearchQuery(val);
+                setActiveSearchMatchIdx(0);
+                const q = val.trim().toLowerCase();
+                if (q) {
+                  const firstHit = renderedMessages.find(m =>
+                    m.text.toLowerCase().includes(q)
+                  );
+                  if (firstHit) scrollToMessage(firstHit.id);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  jumpChatSearchMatch(e.shiftKey ? 'prev' : 'next');
+                } else if (e.key === 'Escape') {
+                  setIsChatSearchOpen(false);
+                  setChatSearchQuery('');
+                }
+              }}
+              placeholder={`Search messages with ${character.name}...`}
+              className="flex-1 bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none min-w-0"
+            />
+            {trimmedChatQuery && (
+              <span className="text-[10px] font-mono text-slate-400 tabular-nums flex-shrink-0">
+                {matchedMsgIds.length > 0
+                  ? `${Math.min(activeSearchMatchIdx + 1, matchedMsgIds.length)} / ${matchedMsgIds.length}`
+                  : '0 matches'}
+              </span>
+            )}
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                type="button"
+                disabled={matchedMsgIds.length === 0}
+                onClick={() => jumpChatSearchMatch('prev')}
+                title="Jump to previous matching message"
+                className="p-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] disabled:opacity-30 text-slate-300 transition cursor-pointer"
+              >
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={matchedMsgIds.length === 0}
+                onClick={() => jumpChatSearchMatch('next')}
+                title="Jump to next matching message"
+                className="p-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] disabled:opacity-30 text-slate-300 transition cursor-pointer"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChatSearchOpen(false);
+                  setChatSearchQuery('');
+                }}
+                title="Close search"
+                className="p-1 rounded-lg hover:bg-white/[0.1] text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Messages Feed */}
@@ -909,7 +1212,10 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
         {renderedMessages.map((msg) => {
           const isUser = msg.sender === 'user';
-          const isHighlighted = highlightedMsgId === msg.id;
+          const isActiveSearchTarget =
+            matchedMsgIds.length > 0 && matchedMsgIds[activeSearchMatchIdx] === msg.id;
+          const isHighlighted = highlightedMsgId === msg.id || isActiveSearchTarget;
+          const isConfirmingRewind = confirmingRewindMsgId === msg.id;
 
           return (
             <div
@@ -931,9 +1237,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 />
               )}
               <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[75%] min-w-0`}>
-                {/* Message Bubble with Reply & Delete Reference */}
+                {/* Message Bubble with Reply, Rewind & Delete Reference */}
                 <div className="relative group max-w-full">
-                {/* Floating Reply & Delete Action Bar */}
+                {/* Floating Reply, Rewind & Delete Action Bar */}
                 <div
                   className={`absolute -top-3 ${
                     isUser ? 'right-2' : 'left-2'
@@ -954,10 +1260,27 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                   >
                     <Reply className="w-3 h-3" />
                   </button>
+                  {onRewindToMessage && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConfirmingRewindMsgId((prev) => (prev === msg.id ? null : msg.id))
+                      }
+                      title="Rewind chat to here"
+                      aria-label="Rewind chat to here"
+                      className={`p-1.5 rounded-xl bg-[#131622]/95 backdrop-blur-md border shadow-lg transition cursor-pointer flex items-center gap-1 ${
+                        isConfirmingRewind
+                          ? 'border-amber-400/60 text-amber-300'
+                          : 'border-white/15 text-slate-300 hover:text-amber-400'
+                      }`}
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                    </button>
+                  )}
                   {onDeleteMessage && (
                     <button
                       type="button"
-                      onClick={() => onDeleteMessage(msg.id)}
+                      onClick={() => onDeleteMessage(msg.sourceMsgId)}
                       title="Delete message"
                       className="p-1.5 rounded-xl bg-[#131622]/95 backdrop-blur-md border border-white/15 text-slate-300 hover:text-rose-400 shadow-lg transition cursor-pointer"
                     >
@@ -991,7 +1314,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     />
                     {msg.text && (
                       <p className="p-3 text-xs text-white bg-[#131622] leading-relaxed">
-                        {renderRoleplayText(msg.text)}
+                        {renderRoleplayText(msg.text, chatSearchQuery)}
                       </p>
                     )}
                   </div>
@@ -1019,7 +1342,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                         {isUser ? '> USER:' : `> ${character.name.toUpperCase()}:`}
                       </span>
                     )}
-                    {renderRoleplayText(msg.text)}
+                    {renderRoleplayText(msg.text, chatSearchQuery)}
                   </div>
                 )}
               </div>
@@ -1030,15 +1353,22 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                 </span>
                 {isUser && <CheckCheck className="w-3 h-3 text-purple-400" />}
 
-                {/* Character.ai Multi-Variant Swipe Indicator (< 1/2 >) & Regenerate Control */}
+                {/* Message Variation Swiping (< 1/2 > or < 2/3 >) & Alternate Branch Generator */}
                 {!isUser && msg.isLastPartOfMsg && (onSwipeMessageVariant || onRegenerateMessageVariant) && (() => {
-                  const variantsList =
-                    msg.variants && msg.variants.length > 0 ? msg.variants : [msg.text];
-                  const totalVariants = variantsList.length;
-                  const activeVariantIdx =
-                    typeof msg.activeVariantIndex === 'number'
-                      ? Math.min(Math.max(0, msg.activeVariantIndex), totalVariants - 1)
+                  const rawList =
+                    msg.variations && msg.variations.length > 0
+                      ? msg.variations
+                      : msg.variants && msg.variants.length > 0
+                      ? msg.variants
+                      : [msg.text];
+                  const totalVariants = rawList.length;
+                  const rawActiveIdx =
+                    typeof msg.activeVariationIndex === 'number'
+                      ? msg.activeVariationIndex
+                      : typeof msg.activeVariantIndex === 'number'
+                      ? msg.activeVariantIndex
                       : 0;
+                  const activeVariantIdx = Math.min(Math.max(0, rawActiveIdx), totalVariants - 1);
                   const isRegeneratingThis = regeneratingMsgId === msg.sourceMsgId;
 
                   return (
@@ -1048,8 +1378,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                           type="button"
                           disabled={activeVariantIdx <= 0 || isRegeneratingThis}
                           onClick={() => onSwipeMessageVariant?.(msg.sourceMsgId, 'prev')}
-                          title="Previous reply variant"
-                          aria-label="Previous reply variant"
+                          title="Previous variation"
+                          aria-label="Previous variation"
                           className="p-0.5 rounded hover:bg-white/10 hover:text-cyan-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-300 transition cursor-pointer disabled:cursor-not-allowed"
                         >
                           <ChevronLeft className="w-3 h-3" />
@@ -1069,13 +1399,13 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                           }}
                           title={
                             activeVariantIdx < totalVariants - 1
-                              ? 'Next reply variant'
-                              : 'Generate new reply variant'
+                              ? 'Next variation'
+                              : 'Generate alternate response branch'
                           }
                           aria-label={
                             activeVariantIdx < totalVariants - 1
-                              ? 'Next reply variant'
-                              : 'Generate new reply variant'
+                              ? 'Next variation'
+                              : 'Generate alternate response branch'
                           }
                           className="p-0.5 rounded hover:bg-white/10 hover:text-cyan-300 disabled:opacity-40 transition cursor-pointer"
                         >
@@ -1088,8 +1418,8 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                           type="button"
                           disabled={isRegeneratingThis}
                           onClick={() => onRegenerateMessageVariant(msg.sourceMsgId)}
-                          title="Regenerate reply variant"
-                          aria-label="Regenerate reply variant"
+                          title="Generate new response variation"
+                          aria-label="Generate new response variation"
                           className="p-1 rounded-lg bg-white/[0.04] hover:bg-purple-500/20 border border-white/10 hover:border-purple-500/40 text-slate-400 hover:text-purple-300 disabled:opacity-40 transition cursor-pointer"
                         >
                           <RotateCw
@@ -1101,6 +1431,58 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                   );
                 })()}
               </div>
+
+              {/* Inline Rewind Confirmation Dialog */}
+              {isConfirmingRewind && onRewindToMessage && (
+                <div className="mt-2 p-2.5 rounded-xl bg-[#141826]/95 border border-amber-500/40 shadow-xl backdrop-blur-xl max-w-sm text-left space-y-2 z-20">
+                  <div className="flex items-start gap-2">
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-amber-100 leading-snug font-medium">
+                      Rewind chat here? All messages sent after this point will be removed.
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingRewindMsgId(null)}
+                      className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[10px] font-medium text-slate-300 transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    {isUser && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmingRewindMsgId(null);
+                          onRewindToMessage(msg.sourceMsgId, 'edit');
+                          setTimeout(() => {
+                            inputRef.current?.focus();
+                          }, 60);
+                        }}
+                        title="Remove this message and subsequent messages, placing its text back into the chat input field"
+                        className="px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-400/40 text-[10px] font-semibold text-indigo-200 transition cursor-pointer"
+                      >
+                        Edit & Re-send
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetDomId = msg.id;
+                        setConfirmingRewindMsgId(null);
+                        onRewindToMessage(msg.sourceMsgId, 'regenerate');
+                        setTimeout(() => {
+                          scrollToMessage(targetDomId);
+                        }, 60);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500/25 hover:bg-amber-500/40 border border-amber-400/50 text-[10px] font-semibold text-amber-100 transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                      <span>{isUser ? 'Rewind & Regenerate' : 'Confirm Rewind'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
               </div>
             </div>
           );
