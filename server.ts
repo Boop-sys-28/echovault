@@ -8,7 +8,7 @@ import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 
 const ENV_FILE_PATH = path.resolve(process.cwd(), '.env');
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-flash-latest';
 const DEFAULT_GEMINI_KEY = 'AQ.Ab8RN6Iwj0s8lLNUqe_jiVEdJ6pn2Bi_d3nLJQPSajZ_tWy15g';
 const FALLBACK_GEMINI_KEYS = [
   DEFAULT_GEMINI_KEY,
@@ -16,10 +16,9 @@ const FALLBACK_GEMINI_KEYS = [
 ];
 
 const CANDIDATE_MODELS = [
-  'gemini-flash-latest',
+  GEMINI_MODEL,
   'gemini-3.8-flash',
   'gemini-3.1-flash-lite',
-  GEMINI_MODEL,
 ];
 
 /**
@@ -221,7 +220,7 @@ async function resolveImageToGeminiInlineData(
 }
 
 /**
- * Executes a Gemini generateContent call using `@google/genai` with model "gemini-2.5-flash"
+ * Executes a Gemini generateContent call using `@google/genai` with active Gemini Flash models
  * and unrestrictive safetySettings (`HarmBlockThreshold.BLOCK_NONE`) so roleplay banter and
  * romance are never blocked.
  */
@@ -760,7 +759,7 @@ async function startServer() {
     }
   });
 
-  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Google Generative AI — gemini-2.5-flash)
+  // 5. Dynamic Character.AI-Style Roleplay & Banter Endpoint (Google Generative AI — Gemini Flash)
   app.post('/api/chat', async (req, res) => {
     const {
       prompt,
@@ -1152,7 +1151,7 @@ ${recentAssistantReplies
       return res.status(429).json({
         error: 'QUOTA_EXCEEDED',
         message:
-          'Gemini API rate limit or quota reached for gemini-2.5-flash. Wait a moment and click Retry.',
+          'Gemini API rate limit or quota reached for Gemini Flash. Wait a moment and click Retry.',
         reason: 'QUOTA_EXCEEDED',
         details: String(effectiveError?.message || 'Rate limit exceeded'),
       });

@@ -68,6 +68,8 @@ import {
   DEFAULT_FREQUENCY_PENALTY,
   DEFAULT_PRESENCE_PENALTY,
   MAX_CHAT_HISTORY_MESSAGES,
+  GEMINI_MODEL,
+  GEMINI_ROLEPLAY_SAFETY_SETTINGS,
   deduplicateConsecutiveBubbles,
 } from './utils/responseDirector';
 import {
@@ -1175,6 +1177,8 @@ export default function App() {
       : payload.history;
     const enrichedPayload = {
       ...payload,
+      model: (payload.model as string) || GEMINI_MODEL,
+      safetySettings: GEMINI_ROLEPLAY_SAFETY_SETTINGS,
       history: cappedHistory,
       frequencyPenalty: DEFAULT_FREQUENCY_PENALTY,
       presencePenalty: DEFAULT_PRESENCE_PENALTY,

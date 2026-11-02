@@ -507,7 +507,7 @@ export function processArchitectCommand(
   };
 }
 
-export const GEMINI_MODEL = 'gemini-2.5-flash';
+export const GEMINI_MODEL = 'gemini-flash-latest';
 
 export const GEMINI_ROLEPLAY_SAFETY_SETTINGS = [
   {
@@ -779,7 +779,7 @@ export function deduplicateConsecutiveBubbles(
 
 /**
  * Executes a Gemini chat/multimodal completion request via the server-side
- * `/api/chat` proxy using model "gemini-2.5-flash" and safetySettings BLOCK_NONE.
+ * `/api/chat` proxy using the configured Gemini Flash model and safetySettings BLOCK_NONE.
  */
 export async function requestGeminiCompletion(params: {
   apiKey?: string;
@@ -825,9 +825,11 @@ export async function requestGeminiCompletion(params: {
     method: 'POST',
     headers,
     body: JSON.stringify({
+      model: activeModel,
       prompt: promptText,
       image: params.imageBase64,
       systemInstruction: params.systemInstruction,
+      safetySettings: GEMINI_ROLEPLAY_SAFETY_SETTINGS,
       history,
       temporalContext: getLiveTemporalContext(),
     }),
